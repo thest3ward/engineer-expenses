@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en-GB">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#172c37"><title>Engineer Expenses</title><link rel="stylesheet" href="style.css"><script defer src="vendor/tesseract.min.js"></script><script defer src="vendor/jspdf.umd.min.js"></script><script defer src="core.js"></script><script defer src="save-pdf.js"></script><script defer src="app.js"></script></head>
+<body>
+<header><div class="brand"><span class="brand-icon" aria-hidden="true">£</span><span>Engineer <strong>Expenses</strong></span></div><span class="privacy">Free receipt reading · On your device</span></header>
+<main>
+<section class="intro"><p class="eyebrow">LESS PAPERWORK. SAME RECEIPTS.</p><h1>Receipts in.<br>Claim sorted.</h1><p>Snap a receipt, check the details and build your claim.</p><div class="steps"><span><b>1</b> Capture</span><span><b>2</b> Check each item</span><span><b>3</b> Download claim</span></div></section>
+<div class="workspace">
+<div class="entry">
+<section class="panel claim-details"><div class="section-heading"><h2>Your claim</h2><span id="save-status" role="status">Opening draft…</span></div><div class="two-fields"><label>Engineer’s name<input id="engineer" autocomplete="name" maxlength="80" placeholder="Full name"></label><label>Claim date<input type="date" id="claim-date"></label></div></section>
+<section class="capture panel"><div class="capture-mark" aria-hidden="true">+</div><div><h2>Add a receipt</h2><p>We’ll try to read the date, supplier and total. You check the result.</p></div><div class="capture-buttons"><button class="primary" id="camera">Take photo</button><button id="upload">Choose photo</button></div><small>JPG, PNG or WebP · GBP receipts · Up to 20 MB per photo</small><input hidden type="file" id="camera-file" accept="image/jpeg,image/png,image/webp" capture="environment"><input hidden type="file" id="receipt-file" accept="image/jpeg,image/png,image/webp"></section>
+<div id="reading" class="reading" hidden><div><span id="reading-text" role="status">Reading receipt…</span><button id="stop-reading" class="text-button">Enter manually</button></div><progress id="progress" max="1" value="0"></progress></div>
+<div class="section-heading receipt-heading"><h2>Receipts <span id="receipt-count">0</span></h2><span>Check every item before creating your claim</span></div>
+<div id="receipts"></div>
+<div id="empty" class="empty"><div aria-hidden="true">▤</div><h3>Your first receipt goes here</h3><p>Add a photo above to start your claim.</p></div>
+<section class="panel signature-panel"><div class="section-heading"><h2>Your signature</h2><span id="signature-status" role="status">Not added</span></div><p id="signature-help">Draw in the box with your finger or mouse. Your signature will appear on the claim form.</p><canvas id="signature-pad" width="1000" height="400" aria-label="Draw your signature here" aria-describedby="signature-help"></canvas><div class="signature-actions"><span>Sign above</span><button id="clear-signature" type="button" disabled>Clear signature</button></div></section>
+</div>
+<aside><section class="panel summary"><p class="eyebrow">CLAIM SUMMARY</p><p class="total" id="total">£0.00</p><p id="items-summary">No expenses yet</p><div class="divider"></div><div class="check-line"><span>Items checked</span><strong id="checked-count">0 / 0</strong></div><progress id="checked-progress" max="1" value="0"></progress><p id="gate-message" class="gate">Add your first receipt to get started.</p><button class="create" id="preview-claim" disabled>Preview PDF <span aria-hidden="true">↗</span></button><button class="primary create" id="create-claim" disabled>Download PDF <span aria-hidden="true">↓</span></button><p class="pack-note">Preview opens a draft in a new tab. Download opens the save options on your device.</p></section>
+<section class="draft-tools"><h3>Your draft stays here</h3><p>Saved in this browser on this device. Export a backup to keep a copy or move it to another device.</p><div><button id="backup">Export backup</button><button id="restore">Restore backup</button></div><input hidden type="file" id="backup-file" accept="application/json,.json"><button id="new-claim" class="text-button">Start a new claim</button></section></aside>
+</div>
+<footer>Receipt reading happens on your device. No receipt is sent to an AI service. Check the photo against the date, description and amount.</footer>
+</main>
+<div id="notice" role="status" hidden></div>
+<dialog id="photo-dialog"><div class="dialog-heading"><h2 id="photo-title">Receipt</h2><button id="close-photo">Close</button></div><img id="large-photo" alt="Receipt photo for checking"><p>Check the total, date and description against your expense.</p></dialog>
+<dialog id="save-dialog"><div class="dialog-heading"><h2>Save your claim PDF</h2><button id="close-save">Close</button></div><p id="save-file-name"></p><p id="save-instructions">Tap Save PDF. On iPhone, choose Save to Files, choose a folder and tap Save.</p><button class="primary" id="save-file">Save PDF</button><p id="save-result" role="status"></p></dialog>
+</body></html>
+
