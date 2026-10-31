@@ -33,3 +33,5 @@ body { max-width:100%; }
   dialog { max-width:calc(100vw - 24px); max-height:calc(100dvh - 32px); overflow:auto; overscroll-behavior:contain; }
   #notice { bottom:calc(12px + env(safe-area-inset-bottom, 0px)); }
 }
+
+.app-nav{display:flex;gap:6px;font-size:13px}.app-nav a{padding:10px 12px;border-radius:7px;text-decoration:none;color:#183440}.app-nav a[aria-current]{background:#183440;color:#fff}@media(max-width:700px){header:has(.app-nav){flex-wrap:wrap;gap:8px;padding-top:max(10px,env(safe-area-inset-top));padding-bottom:8px}header:has(.app-nav) .brand{font-size:15px}header:has(.app-nav) .brand-icon{width:28px;height:30px}.app-nav{font-size:12px;gap:2px}.app-nav a{padding:9px 8px}}
