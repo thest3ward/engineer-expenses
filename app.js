@@ -2,6 +2,8 @@
 const C=ExpenseCore,$=s=>document.querySelector(s),money=n=>new Intl.NumberFormat('en-GB',{style:'currency',currency:'GBP'}).format(n/100);
 const today=()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;};
 let state={engineer:'',claimDate:today(),receipts:[]},db,worker,readingId=null,readToken=0,saving=Promise.resolve(),saveFailed=false,noticeTimer,pdfSaving=false,pendingPDF=null;
+const expandedReceipts=new Set();
+let receivingPhoto=false;
 const escapeHtml=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function notify(message,error=false){$('#notice').textContent=message;$('#notice').className=error?'error':'';$('#notice').hidden=false;clearTimeout(noticeTimer);noticeTimer=setTimeout(()=>$('#notice').hidden=true,error?12000:5500);}
 function requestResult(req){return new Promise((resolve,reject)=>{req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);});}
@@ -21,11 +23,41 @@ function summary(){
  let message=!count?'Add your first receipt to get started.':checked<count?`${count-checked} item${count-checked===1?' needs':'s need'} checking against the receipt photo.`:!state.engineer.trim()?'Enter the engineer’s name above.':!C.validDate(state.claimDate)?'Enter a valid claim date.':'All items checked. Your claim is ready.';
  if(readingId)message='Finish reading or choose Enter manually, then check the item.';
  $('#gate-message').textContent=message;$('#create-claim').disabled=!C.canCreate(state)||!!readingId||pdfSaving;$('#preview-claim').disabled=!count;
- $('#camera').disabled=$('#upload').disabled=!!readingId;$('#new-claim').disabled=$('#restore').disabled=!!readingId;
+ const adding=receivingPhoto||!!readingId;
+ for(const id of ['camera','upload','another-camera','another-upload'])$('#'+id).disabled=adding;
+ $('#add-another').hidden=!count;$('#new-claim').disabled=$('#restore').disabled=adding;
 }
-function card(r,i){return `<article class="receipt ${r.checked?'checked':''}" data-id="${r.id}"><div class="receipt-top"><h3>Receipt ${String(i+1).padStart(2,'0')}</h3><span class="badge">${r.checked?'Checked':'Needs checking'}</span></div><div class="receipt-content"><div><button class="thumbnail" data-action="view" aria-label="View receipt ${i+1}"><img src="${r.image}" alt="Receipt ${i+1}"></button><div class="image-tools"><button class="text-button" data-action="rotate" ${r.reading?'disabled':''}>Rotate</button><button class="text-button remove" data-action="remove" ${r.reading?'disabled':''}>Remove</button></div></div><div class="expense-fields"><label>Date<input type="date" data-field="date" value="${escapeHtml(r.date)}" aria-label="Date for receipt ${i+1}"></label><label>Amount (£)<input type="text" inputmode="decimal" data-field="amount" maxlength="10" placeholder="0.00" value="${escapeHtml(r.amount)}" aria-label="Amount for receipt ${i+1}"></label><label class="description">Description / supplier<input type="text" maxlength="160" data-field="description" placeholder="e.g. Parking at site" value="${escapeHtml(r.description)}" aria-label="Description for receipt ${i+1}"></label></div></div><label class="check"><input type="checkbox" data-action="check" ${r.checked?'checked':''} ${C.validItem(r)?'':'disabled'}>I’ve checked the photo, date, description and amount.</label><p class="receipt-hint">${escapeHtml(r.note||'Fill in the details, then check this item.')} <button class="text-button" data-action="read" ${readingId?'disabled':''}>Read photo again</button></p></article>`;}
+function receiptDescription(r){
+ const category=C.claimTypes.includes(r.category)?r.category:'';
+ return [category,r.description.trim()].filter(Boolean).join(' - ');
+}
+function card(r,i){
+ const number=String(i+1).padStart(2,'0');
+ const checked=r.checked&&C.validItem(r), collapsed=checked&&!expandedReceipts.has(r.id);
+ const detailsId='receipt-details-'+r.id;
+ const summary=r.category||r.description.trim()||'Receipt '+number;
+ const options=C.claimTypes.map(type=>`<option${r.category===type?' selected':''}>${type}</option>`).join('');
+ return `<article class="receipt ${checked?'checked':''}" data-id="${r.id}">
+ <div class="receipt-top" ${collapsed?'hidden':''}><h3>Receipt ${number}</h3><span class="badge">${r.reading?'Reading…':checked?'Checked':'Needs checking'}</span></div>
+ <button type="button" class="receipt-toggle" data-action="toggle" aria-controls="${detailsId}" aria-expanded="${!collapsed}" ${checked?'':'hidden'}>
+ <span class="receipt-toggle-label"><span aria-hidden="true">✓</span> ${escapeHtml(summary)}</span>
+ <span>${dateText(r.date)}</span><strong>${checked?money(C.pence(r.amount)):''}</strong><span aria-hidden="true">${collapsed?'▾':'▴'}</span>
+ </button>
+ <div id="${detailsId}" class="receipt-details" ${collapsed?'hidden':''}>
+ <div class="receipt-content"><div><button class="thumbnail" data-action="view" aria-label="View receipt ${i+1}"><img src="${r.image}" alt="Receipt ${i+1}"></button>
+ <div class="image-tools"><button class="text-button" data-action="rotate" ${r.reading?'disabled':''}>Rotate</button><button class="text-button remove" data-action="remove" ${r.reading?'disabled':''}>Remove</button></div></div>
+ <div class="expense-fields">
+ <label>Date<input type="date" data-field="date" value="${escapeHtml(r.date)}" aria-label="Date for receipt ${i+1}"></label>
+ <label>Amount incl. VAT (£)<input type="text" inputmode="decimal" data-field="amount" maxlength="10" placeholder="0.00" value="${escapeHtml(r.amount)}" aria-label="Amount including VAT for receipt ${i+1}"></label>
+ <label class="description">Claim type<select data-field="category" aria-label="Claim type for receipt ${i+1}"><option value="">Select a type</option>${options}</select></label>
+ <label class="description">Description${r.category===undefined?' / supplier':' (optional)'}<input type="text" maxlength="160" data-field="description" placeholder="e.g. Parking at site" value="${escapeHtml(r.description)}" aria-label="Description for receipt ${i+1}"></label>
+ </div></div>
+ <label class="check"><input type="checkbox" data-action="check" ${checked?'checked':''} ${C.validItem(r)?'':'disabled'}>I’ve checked the photo, date, claim details and amount.</label>
+ <p class="receipt-hint">${escapeHtml(r.note||'Fill in the details, then check this item.')} <button class="text-button" data-action="read" ${readingId?'disabled':''}>Read photo again</button></p>
+ </div></article>`;
+}
 function render(){const focusId=document.activeElement?.closest('[data-id]')?.dataset.id,field=document.activeElement?.dataset.field;$('#receipts').innerHTML=state.receipts.map(card).join('');$('#empty').hidden=!!state.receipts.length;summary();if(focusId&&field)$(`[data-id="${focusId}"] [data-field="${field}"]`)?.focus();}
-function updateCard(r){const el=$(`[data-id="${r.id}"]`);el.classList.toggle('checked',r.checked);el.querySelector('.badge').textContent=r.checked?'Checked':'Needs checking';const check=el.querySelector('[data-action="check"]');check.checked=r.checked;check.disabled=!C.validItem(r);summary();}
+function updateCard(r){const el=$(`[data-id="${r.id}"]`);el.classList.toggle('checked',r.checked);el.querySelector('.badge').textContent=r.checked?'Checked':'Needs checking';el.querySelector('.receipt-toggle').hidden=!r.checked;const check=el.querySelector('[data-action="check"]');check.checked=r.checked;check.disabled=!C.validItem(r);summary();}
 $('#engineer').addEventListener('input',e=>{state.engineer=e.target.value;summary();save();});
 $('#claim-date').addEventListener('input',e=>{state.claimDate=e.target.value;summary();save();});
 const signaturePad=$('#signature-pad');let signaturePointer=null;
@@ -36,28 +68,62 @@ signaturePad.onpointermove=e=>{if(e.pointerId!==signaturePointer)return;e.preven
 function finishSignature(e){if(e.pointerId!==signaturePointer)return;signaturePointer=null;renderSignature();save();}
 signaturePad.onpointerup=finishSignature;signaturePad.onpointercancel=finishSignature;signaturePad.onlostpointercapture=finishSignature;
 $('#clear-signature').onclick=()=>{state.signature=[];renderSignature();save();};
-$('#camera').onclick=()=>$('#camera-file').click();$('#upload').onclick=()=>$('#receipt-file').click();
+for(const id of ['camera','another-camera'])$('#'+id).onclick=()=>$('#camera-file').click();
+for(const id of ['upload','another-upload'])$('#'+id).onclick=()=>$('#receipt-file').click();
 async function normaliseImage(file){
  if(file.size>20*1024*1024)throw Error('This photo is over 20 MB. Choose a smaller photo.');
  if(!['image/jpeg','image/png','image/webp'].includes(file.type))throw Error('Choose a JPG, PNG or WebP photo. Convert HEIC photos to JPG first.');
  const url=URL.createObjectURL(file);try{const img=new Image();img.src=url;await img.decode();const scale=Math.min(1,5000/Math.max(img.width,img.height),2200/img.width),canvas=document.createElement('canvas');canvas.width=Math.max(1,Math.round(img.width*scale));canvas.height=Math.max(1,Math.round(img.height*scale));const ctx=canvas.getContext('2d');ctx.fillStyle='white';ctx.fillRect(0,0,canvas.width,canvas.height);ctx.drawImage(img,0,0,canvas.width,canvas.height);return canvas.toDataURL('image/jpeg',.9);}finally{URL.revokeObjectURL(url);}}
-for(const selector of ['#receipt-file','#camera-file'])$(selector).onchange=async e=>{const file=e.target.files[0];e.target.value='';if(!file||readingId)return;try{const image=await normaliseImage(file);const r={id:crypto.randomUUID(),image,date:'',amount:'',description:'',checked:false,reading:false,note:''};state.receipts.push(r);save();render();await readReceipt(r);}catch(err){notify(err.message||'Could not open that photo. Try a JPG image.',true);}};
+for(const selector of ['#receipt-file','#camera-file'])$(selector).onchange=async e=>{
+ const file=e.target.files[0];
+ e.target.value='';
+ if(!file||readingId||receivingPhoto)return;
+ receivingPhoto=true;
+ summary();
+ let image;
+ try{
+  image=await normaliseImage(file);
+ }catch(err){
+  notify(err.message||'Could not open that photo. Try a JPG image.',true);
+  return;
+ }finally{
+  receivingPhoto=false;
+  summary();
+ }
+ const r={id:crypto.randomUUID(),image,date:'',amount:'',description:'',category:'',checked:false,reading:false,note:''};
+ state.receipts.push(r);
+ const reading=readReceipt(r);
+ $('#receipts').lastElementChild.scrollIntoView({block:'nearest'});
+ await reading;
+};
 async function readReceipt(r){
- if(readingId)return;const token=++readToken;readingId=r.id;r.reading=true;r.checked=false;const before={date:r.date,amount:r.amount,description:r.description};$('#reading').hidden=false;$('#reading-text').textContent='Starting free receipt reader…';$('#progress').value=0;render();save();let timeout;
+ if(readingId||receivingPhoto)return;const token=++readToken;readingId=r.id;r.reading=true;r.checked=false;const before={date:r.date,amount:r.amount};$('#reading').hidden=false;$('#reading-text').textContent='Starting free receipt reader…';$('#progress').value=0;render();save();let timeout;
  try{
   const task=(async()=>{let currentWorker=worker;if(!currentWorker)currentWorker=await Tesseract.createWorker('eng',1,{workerPath:new URL('vendor/worker.min.js',location.href).href,corePath:new URL('vendor/core/',location.href).href,langPath:new URL('vendor/lang/',location.href).href,logger:m=>{if(token!==readToken)return;$('#reading-text').textContent=m.status==='recognizing text'?`Reading receipt… ${Math.round(m.progress*100)}%`:'Loading receipt reader…';$('#progress').value=m.progress||0;}});if(token!==readToken){await currentWorker.terminate();throw Error('Cancelled');}worker=currentWorker;return currentWorker.recognize(r.image);})();
   const result=await Promise.race([task,new Promise((_,reject)=>{timeout=setTimeout(()=>reject(Error('timeout')),90000);})]);if(token!==readToken)return;
-  const found=C.parseReceipt(result.data.text);for(const key of ['date','amount','description']){if(!before[key]&&r[key]===before[key]&&found[key])r[key]=found[key];}
+  const found=C.parseReceipt(result.data.text);for(const key of ['date','amount']){if(!before[key]&&r[key]===before[key]&&found[key])r[key]=found[key];}
   r.note=found.amount?'Suggested details only. Compare every field with the photo before checking.':'Couldn’t identify a clear total. Enter the amount from the receipt and check the other details.';
  }catch(e){if(token===readToken){r.note='Receipt reading didn’t finish. Enter the details manually or try reading again.';if(worker){worker.terminate().catch(()=>{});worker=null;}}}
  finally{clearTimeout(timeout);if(token===readToken){r.reading=false;readingId=null;$('#reading').hidden=true;render();save();}}
 }
 $('#stop-reading').onclick=()=>{const r=state.receipts.find(x=>x.id===readingId);++readToken;if(worker){worker.terminate().catch(()=>{});worker=null;}if(r){r.reading=false;r.checked=false;r.note='Enter the details from the photo, then check this item.';}readingId=null;$('#reading').hidden=true;render();save();};
 $('#receipts').oninput=e=>{const key=e.target.dataset.field;if(!key)return;const r=state.receipts.find(x=>x.id===e.target.closest('[data-id]').dataset.id);C.editItem(r,key,e.target.value);updateCard(r);save();};
-$('#receipts').onchange=e=>{if(e.target.dataset.action!=='check')return;const r=state.receipts.find(x=>x.id===e.target.closest('[data-id]').dataset.id);r.checked=e.target.checked&&C.validItem(r);updateCard(r);save();};
+$('#receipts').onchange=e=>{if(e.target.dataset.action!=='check')return;const r=state.receipts.find(x=>x.id===e.target.closest('[data-id]').dataset.id);r.checked=e.target.checked&&C.validItem(r);
+ expandedReceipts.delete(r.id);
+ render();
+ if(r.checked){
+  const toggle=$(`[data-id="${r.id}"] .receipt-toggle`);
+  toggle.focus({preventScroll:true});
+  toggle.scrollIntoView({block:'nearest'});
+ }
+ save();};
 $('#receipts').onclick=async e=>{const button=e.target.closest('button[data-action]');if(!button)return;const r=state.receipts.find(x=>x.id===button.closest('[data-id]').dataset.id),action=button.dataset.action;
+ if(action==='toggle'){
+  if(expandedReceipts.has(r.id))expandedReceipts.delete(r.id);else expandedReceipts.add(r.id);
+  render();$(`[data-id=${JSON.stringify(r.id)}] .receipt-toggle`).focus({preventScroll:true});
+ }
  if(action==='view'){const index=state.receipts.indexOf(r)+1;$('#photo-title').textContent=`Receipt ${index} · ${r.amount?money(C.pence(r.amount)||0):'Check amount'}`;$('#large-photo').src=r.image;$('#photo-dialog').showModal();}
- if(action==='remove'&&confirm('Remove this receipt from the draft?')){state.receipts=state.receipts.filter(x=>x!==r);render();save();}
+ if(action==='remove'&&confirm('Remove this receipt from the draft?')){expandedReceipts.delete(r.id);state.receipts=state.receipts.filter(x=>x!==r);render();save();}
  if(action==='read')await readReceipt(r);
  if(action==='rotate'){try{const image=new Image();image.src=r.image;await image.decode();const canvas=document.createElement('canvas');canvas.width=image.height;canvas.height=image.width;const ctx=canvas.getContext('2d');ctx.translate(canvas.width/2,canvas.height/2);ctx.rotate(Math.PI/2);ctx.drawImage(image,-image.width/2,-image.height/2);C.editItem(r,'image',canvas.toDataURL('image/jpeg',.92));r.note='Photo rotated. Check the details again.';render();save();}catch{notify('Could not rotate this photo.',true);}}
 };
@@ -66,7 +132,7 @@ function download(blob,name){const url=URL.createObjectURL(blob),a=document.crea
 $('#backup').onclick=()=>download(new Blob([JSON.stringify({format:'engineer-expenses',version:1,claim:state})],{type:'application/json'}),`expenses-backup-${today()}.json`);
 $('#restore').onclick=()=>$('#backup-file').click();
 $('#backup-file').onchange=async e=>{const file=e.target.files[0];e.target.value='';if(!file)return;try{if(file.size>100*1024*1024)throw Error('Backup file is too large.');const data=JSON.parse(await file.text()),s=data.claim;if(data.format!=='engineer-expenses'||data.version!==1||!s||typeof s.engineer!=='string'||s.engineer.length>80||typeof s.claimDate!=='string'||!Array.isArray(s.receipts)||s.receipts.length>300)throw Error('This is not a supported expenses backup.');
- const receipts=[];for(const r of s.receipts){if(!r||typeof r.image!=='string'||r.image.length>30*1024*1024||!/^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(r.image)||['date','amount','description'].some(k=>typeof r[k]!=='string')||r.description.length>160||r.date.length>10||r.amount.length>10)throw Error('The backup contains an invalid receipt.');const img=new Image();img.src=r.image;await img.decode();receipts.push({id:crypto.randomUUID(),image:r.image,date:r.date,amount:r.amount,description:r.description,checked:false,reading:false,note:'Restored from backup. Check this item again.'});}
+ const receipts=[];for(const r of s.receipts){if(!r||typeof r.image!=='string'||r.image.length>30*1024*1024||!/^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(r.image)||['date','amount','description'].some(k=>typeof r[k]!=='string')||r.description.length>160||r.date.length>10||r.amount.length>10)throw Error('The backup contains an invalid receipt.');const img=new Image();img.src=r.image;await img.decode();receipts.push({id:crypto.randomUUID(),image:r.image,date:r.date,amount:r.amount,description:r.description,...(r.category===undefined?{}:{category:C.claimTypes.includes(r.category)?r.category:''}),checked:false,reading:false,note:'Restored from backup. Check this item again.'});}
  const signature=C.cleanSignature(s.signature);if(state.receipts.length&&!confirm('Replace the current draft with this backup? Export your current draft first if you need to keep it.'))return;state={engineer:s.engineer,claimDate:s.claimDate,receipts,signature};$('#engineer').value=state.engineer;$('#claim-date').value=state.claimDate;render();renderSignature();save();notify('Backup restored. Check each item before creating the claim.');}catch(err){notify(err.message||'Could not restore that backup.',true);}};
 $('#new-claim').onclick=()=>{if(!confirm('Start a new claim? Download your claim PDF or export a backup first. This clears the current draft.'))return;state={engineer:state.engineer,claimDate:today(),receipts:[],signature:[]};$('#claim-date').value=state.claimDate;render();renderSignature();save();};
 function dateText(s){return C.validDate(s)?s.split('-').reverse().join('/'):'Not entered';}
@@ -77,14 +143,14 @@ function buildPDF(claim,{preview=false}={}){
  const pdf=new jspdf.jsPDF({unit:'mm',format:'a4',compress:true}),total=claim.receipts.reduce((n,r)=>n+(C.pence(r.amount)||0),0),pageW=210,name=claim.engineer.trim()||'Not entered';let y;
  const itemAmount=r=>C.pence(r.amount)!==null?money(C.pence(r.amount)):'Not entered';
  const text=(str,x,y,size=10,style='normal')=>{pdf.setFont('helvetica',style);pdf.setFontSize(size);pdf.setTextColor(25,44,51);pdf.text(Array.isArray(str)?str.map(ascii):ascii(str),x,y);};
- function heading(continued=false){text('Expenses Claim Form',17,23,21,'bold');text(continued?'Continued':'Engineer expenses',17,31,9);text(`Name: ${name}`,17,44,11);text(`Claim date: ${dateText(claim.claimDate)}`,17,52,10);pdf.setFillColor(232,238,234);pdf.rect(17,61,176,10,'F');text('Receipt',20,67.5,9,'bold');text('Date',40,67.5,9,'bold');text('Description',69,67.5,9,'bold');text('Gross value',166,67.5,9,'bold');y=71;}
+ function heading(continued=false){text('Expenses Claim Form',17,23,21,'bold');text(continued?'Continued':'Engineer expenses',17,31,9);text(`Name: ${name}`,17,44,11);text(`Claim date: ${dateText(claim.claimDate)}`,17,52,10);pdf.setFillColor(232,238,234);pdf.rect(17,61,176,10,'F');text('Receipt',20,67.5,9,'bold');text('Date',40,67.5,9,'bold');text('Claim type / description',69,67.5,9,'bold');text('Gross value',166,67.5,9,'bold');y=71;}
  heading();
- claim.receipts.forEach((r,i)=>{const lines=pdf.splitTextToSize(ascii(r.description.trim()||'Not entered'),89),height=Math.max(12,lines.length*4.7+7);if(y+height>239){pdf.addPage();heading(true);}pdf.setDrawColor(215,223,216);pdf.line(17,y+height,193,y+height);text(String(i+1).padStart(2,'0'),20,y+7,9);text(dateText(r.date),40,y+7,9);text(lines,69,y+7,9);pdf.setFont('helvetica','normal');pdf.setFontSize(10);pdf.text(itemAmount(r),190,y+7,{align:'right'});y+=height;});
+ claim.receipts.forEach((r,i)=>{const lines=pdf.splitTextToSize(ascii(receiptDescription(r)||'Not entered'),89),height=Math.max(12,lines.length*4.7+7);if(y+height>239){pdf.addPage();heading(true);}pdf.setDrawColor(215,223,216);pdf.line(17,y+height,193,y+height);text(String(i+1).padStart(2,'0'),20,y+7,9);text(dateText(r.date),40,y+7,9);text(lines,69,y+7,9);pdf.setFont('helvetica','normal');pdf.setFontSize(10);pdf.text(itemAmount(r),190,y+7,{align:'right'});y+=height;});
  if(y>154){pdf.addPage();text('Expenses Claim Form',17,23,21,'bold');text(`Name: ${name}`,17,35,11);text(`Claim date: ${dateText(claim.claimDate)}`,17,43,10);y=53;}
  y+=13;pdf.setFillColor(232,238,234);pdf.rect(17,y-7,176,14,'F');text(preview?'DRAFT TOTAL OF ENTERED AMOUNTS':'TOTAL CLAIMED BY EMPLOYEE',21,y+2,10,'bold');pdf.setFont('helvetica','bold');pdf.text(money(total),189,y+2,{align:'right'});y+=22;
  y+=8;text('Employee signature:',17,y,10);pdf.setDrawColor(110,125,126);pdf.setLineWidth(.2);pdf.line(52,y+1,150,y+1);drawPDFSignature(pdf,C.cleanSignature(claim.signature),54,y);y+=13;text('Approved by A/C: ______________________________________',17,y,10);y+=13;text('Approved by manager: __________________________________',17,y,10);y+=13;text('Total approved by accounts: £ ____________________________',17,y,10);y+=13;text('Total to be reimbursed: £ ________________________________',17,y,10);y+=13;
  const note=pdf.splitTextToSize('Please sign this form and send it with the attached VAT receipts to your line manager. Claims remain subject to the limits in the employee handbook and office approval.',176);text(note,17,y,8);
- claim.receipts.forEach((r,i)=>{pdf.addPage();text(`Receipt ${String(i+1).padStart(2,'0')}`,17,22,18,'bold');text(`${dateText(r.date)}  |  ${itemAmount(r)}`,17,31,10);const lines=pdf.splitTextToSize(ascii(r.description.trim()||'Not entered'),176);text(lines,17,39,10);const top=45+lines.length*4.5,props=pdf.getImageProperties(r.image),maxW=176,maxH=274-top,scale=Math.min(maxW/props.width,maxH/props.height),w=props.width*scale,h=props.height*scale;pdf.addImage(r.image,'JPEG',(pageW-w)/2,top,w,h,undefined,'FAST');if(preview&&!(r.checked&&C.validItem(r))){pdf.setFont('helvetica','bold');pdf.setFontSize(Math.min(34,w/2.8));pdf.setTextColor(210,25,25);pdf.text('NOT CHECKED',pageW/2,top+h/2,{align:'center',angle:25});}});
+ claim.receipts.forEach((r,i)=>{pdf.addPage();text(`Receipt ${String(i+1).padStart(2,'0')}`,17,22,18,'bold');text(`${dateText(r.date)}  |  ${itemAmount(r)}`,17,31,10);const lines=pdf.splitTextToSize(ascii(receiptDescription(r)||'Not entered'),176);text(lines,17,39,10);const top=45+lines.length*4.5,props=pdf.getImageProperties(r.image),maxW=176,maxH=274-top,scale=Math.min(maxW/props.width,maxH/props.height),w=props.width*scale,h=props.height*scale;pdf.addImage(r.image,'JPEG',(pageW-w)/2,top,w,h,undefined,'FAST');if(preview&&!(r.checked&&C.validItem(r))){pdf.setFont('helvetica','bold');pdf.setFontSize(Math.min(34,w/2.8));pdf.setTextColor(210,25,25);pdf.text('NOT CHECKED',pageW/2,top+h/2,{align:'center',angle:25});}});
  const pages=pdf.getNumberOfPages();for(let i=1;i<=pages;i++){pdf.setPage(i);if(preview){pdf.setFont('helvetica','bold');pdf.setFontSize(9);pdf.setTextColor(210,25,25);pdf.text('PREVIEW - NOT FOR SUBMISSION',17,278);}pdf.setDrawColor(220,226,221);pdf.line(17,282,193,282);text(`${name} | ${dateText(claim.claimDate)}`,17,288,8);pdf.setFontSize(8);pdf.text(`${i} / ${pages}`,193,288,{align:'right'});}
  pdf.setProperties({title:`Expenses Claim - ${ascii(claim.engineer)} - ${claim.claimDate}`,subject:'Expenses claim and receipt pack',creator:'Engineer Expenses'});return pdf;
 }
