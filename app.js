@@ -3,7 +3,8 @@ const C=ExpenseCore,$=s=>document.querySelector(s),money=n=>new Intl.NumberForma
 const today=()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;};
 let state={engineer:'',claimDate:today(),receipts:[]},db,worker,readingId=null,readToken=0,saving=Promise.resolve(),saveFailed=false,noticeTimer,pdfSaving=false,pendingPDF=null;
 const expandedReceipts=new Set();
-let receivingPhoto=false;
+let importingPhotos=false;
+let cancelCurrentRead=null;
 const escapeHtml=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function notify(message,error=false){$('#notice').textContent=message;$('#notice').className=error?'error':'';$('#notice').hidden=false;clearTimeout(noticeTimer);noticeTimer=setTimeout(()=>$('#notice').hidden=true,error?12000:5500);}
 function requestResult(req){return new Promise((resolve,reject)=>{req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);});}
@@ -22,8 +23,9 @@ function summary(){
  $('#total').textContent=money(total);$('#receipt-count').textContent=count;$('#items-summary').textContent=count?`${count} expense${count===1?'':'s'} · GBP`:'No expenses yet';$('#checked-count').textContent=`${checked} / ${count}`;$('#checked-progress').max=count||1;$('#checked-progress').value=checked;
  let message=!count?'Add your first receipt to get started.':checked<count?`${count-checked} item${count-checked===1?' needs':'s need'} checking against the receipt photo.`:!state.engineer.trim()?'Enter the engineer’s name above.':!C.validDate(state.claimDate)?'Enter a valid claim date.':'All items checked. Your claim is ready.';
  if(readingId)message='Finish reading or choose Enter manually, then check the item.';
- $('#gate-message').textContent=message;$('#create-claim').disabled=!C.canCreate(state)||!!readingId||pdfSaving;$('#preview-claim').disabled=!count;
- const adding=receivingPhoto||!!readingId;
+ else if(importingPhotos)message='Adding receipt photos…';
+ const adding=importingPhotos||!!readingId;
+ $('#gate-message').textContent=message;$('#create-claim').disabled=!C.canCreate(state)||adding||pdfSaving;$('#preview-claim').disabled=!count;
  for(const id of ['camera','upload','another-camera','another-upload'])$('#'+id).disabled=adding;
  $('#add-another').hidden=!count;$('#new-claim').disabled=$('#restore').disabled=adding;
 }
@@ -53,7 +55,7 @@ function card(r,i){
  <label class="description">Description${r.category===undefined?' / supplier':' (optional)'}<input type="text" maxlength="160" data-field="description" placeholder="e.g. Parking at site" value="${escapeHtml(r.description)}" aria-label="Description for receipt ${i+1}"></label>
  </div></div>
  <label class="check"><input type="checkbox" data-action="check" ${checked?'checked':''} ${C.validItem(r)?'':'disabled'}>I’ve checked the photo, date, claim details and amount.</label>
- <p class="receipt-hint">${escapeHtml(r.note||'Fill in the details, then check this item.')} <button class="text-button" data-action="read" ${readingId?'disabled':''}>Read photo again</button></p>
+ <p class="receipt-hint">${escapeHtml(r.note||'Fill in the details, then check this item.')} <button class="text-button" data-action="read" ${readingId||importingPhotos?'disabled':''}>Read photo again</button></p>
  </div></article>`;
 }
 function render(){const focusId=document.activeElement?.closest('[data-id]')?.dataset.id,field=document.activeElement?.dataset.field;$('#receipts').innerHTML=state.receipts.map(card).join('');$('#empty').hidden=!!state.receipts.length;summary();if(focusId&&field)$(`[data-id="${focusId}"] [data-field="${field}"]`)?.focus();}
@@ -75,38 +77,50 @@ async function normaliseImage(file){
  if(!['image/jpeg','image/png','image/webp'].includes(file.type))throw Error('Choose a JPG, PNG or WebP photo. Convert HEIC photos to JPG first.');
  const url=URL.createObjectURL(file);try{const img=new Image();img.src=url;await img.decode();const scale=Math.min(1,5000/Math.max(img.width,img.height),2200/img.width),canvas=document.createElement('canvas');canvas.width=Math.max(1,Math.round(img.width*scale));canvas.height=Math.max(1,Math.round(img.height*scale));const ctx=canvas.getContext('2d');ctx.fillStyle='white';ctx.fillRect(0,0,canvas.width,canvas.height);ctx.drawImage(img,0,0,canvas.width,canvas.height);return canvas.toDataURL('image/jpeg',.9);}finally{URL.revokeObjectURL(url);}}
 for(const selector of ['#receipt-file','#camera-file'])$(selector).onchange=async e=>{
- const file=e.target.files[0];
+ const files=Array.from(e.target.files);
  e.target.value='';
- if(!file||readingId||receivingPhoto)return;
- receivingPhoto=true;
+ if(!files.length||readingId||importingPhotos)return;
+ importingPhotos=true;
  summary();
- let image;
+ const added=[];
+ const failures=[];
  try{
-  image=await normaliseImage(file);
- }catch(err){
-  notify(err.message||'Could not open that photo. Try a JPG image.',true);
-  return;
+  for(const file of files){
+   try{
+    const image=await normaliseImage(file);
+    added.push({id:crypto.randomUUID(),image,date:'',amount:'',description:'',category:'',checked:false,reading:false,note:''});
+   }catch(err){
+    failures.push(err.message||'Could not open that photo. Try a JPG image.');
+   }
+  }
+  if(!added.length)return;
+  state.receipts.push(...added);
+  render();
+  save();
+  $(`[data-id="${added[0].id}"]`)?.scrollIntoView({block:'nearest'});
+  for(const [index,receipt] of added.entries()){
+   if(!state.receipts.includes(receipt)||receipt.checked)continue;
+   const label=added.length>1?`Photo ${index+1} of ${added.length}: `:'';
+   await readReceipt(receipt,label);
+  }
  }finally{
-  receivingPhoto=false;
-  summary();
+  importingPhotos=false;
+  render();
+  if(failures.length)notify(failures.length===1?failures[0]:`${failures.length} photos could not be added. ${failures[0]}`,true);
  }
- const r={id:crypto.randomUUID(),image,date:'',amount:'',description:'',category:'',checked:false,reading:false,note:''};
- state.receipts.push(r);
- const reading=readReceipt(r);
- $('#receipts').lastElementChild.scrollIntoView({block:'nearest'});
- await reading;
 };
-async function readReceipt(r){
- if(readingId||receivingPhoto)return;const token=++readToken;readingId=r.id;r.reading=true;r.checked=false;const before={date:r.date,amount:r.amount};$('#reading').hidden=false;$('#reading-text').textContent='Starting free receipt reader…';$('#progress').value=0;render();save();let timeout;
+async function readReceipt(r,label=''){
+ if(readingId)return;const token=++readToken;readingId=r.id;r.reading=true;r.checked=false;const before={date:r.date,amount:r.amount};$('#reading').hidden=false;$('#reading-text').textContent=label+'Starting receipt reader…';$('#progress').value=0;render();save();let timeout;
+ const cancelled=new Promise(resolve=>{cancelCurrentRead=()=>resolve(null);});
  try{
-  const task=(async()=>{let currentWorker=worker;if(!currentWorker)currentWorker=await Tesseract.createWorker('eng',1,{workerPath:new URL('vendor/worker.min.js',location.href).href,corePath:new URL('vendor/core/',location.href).href,langPath:new URL('vendor/lang/',location.href).href,logger:m=>{if(token!==readToken)return;$('#reading-text').textContent=m.status==='recognizing text'?`Reading receipt… ${Math.round(m.progress*100)}%`:'Loading receipt reader…';$('#progress').value=m.progress||0;}});if(token!==readToken){await currentWorker.terminate();throw Error('Cancelled');}worker=currentWorker;return currentWorker.recognize(r.image);})();
-  const result=await Promise.race([task,new Promise((_,reject)=>{timeout=setTimeout(()=>reject(Error('timeout')),90000);})]);if(token!==readToken)return;
+  const task=(async()=>{let currentWorker=worker;if(!currentWorker)currentWorker=await Tesseract.createWorker('eng',1,{workerPath:new URL('vendor/worker.min.js',location.href).href,corePath:new URL('vendor/core/',location.href).href,langPath:new URL('vendor/lang/',location.href).href,logger:m=>{if(token!==readToken)return;$('#reading-text').textContent=label+(m.status==='recognizing text'?`Reading receipt… ${Math.round(m.progress*100)}%`:'Loading receipt reader…');$('#progress').value=m.progress||0;}});if(token!==readToken){await currentWorker.terminate();throw Error('Cancelled');}worker=currentWorker;$('#reading-text').textContent=label+'Reading receipt…';return currentWorker.recognize(r.image);})();
+  const result=await Promise.race([task,cancelled,new Promise((_,reject)=>{timeout=setTimeout(()=>reject(Error('timeout')),90000);})]);if(token!==readToken)return;
   const found=C.parseReceipt(result.data.text);for(const key of ['date','amount']){if(!before[key]&&r[key]===before[key]&&found[key])r[key]=found[key];}
   r.note=found.amount?'Suggested details only. Compare every field with the photo before checking.':'Couldn’t identify a clear total. Enter the amount from the receipt and check the other details.';
  }catch(e){if(token===readToken){r.note='Receipt reading didn’t finish. Enter the details manually or try reading again.';if(worker){worker.terminate().catch(()=>{});worker=null;}}}
- finally{clearTimeout(timeout);if(token===readToken){r.reading=false;readingId=null;$('#reading').hidden=true;render();save();}}
+ finally{clearTimeout(timeout);if(token===readToken){cancelCurrentRead=null;r.reading=false;readingId=null;$('#reading').hidden=true;render();save();}}
 }
-$('#stop-reading').onclick=()=>{const r=state.receipts.find(x=>x.id===readingId);++readToken;if(worker){worker.terminate().catch(()=>{});worker=null;}if(r){r.reading=false;r.checked=false;r.note='Enter the details from the photo, then check this item.';}readingId=null;$('#reading').hidden=true;render();save();};
+$('#stop-reading').onclick=()=>{const r=state.receipts.find(x=>x.id===readingId);++readToken;cancelCurrentRead?.();cancelCurrentRead=null;if(worker){worker.terminate().catch(()=>{});worker=null;}if(r){r.reading=false;r.checked=false;r.note='Enter the details from the photo, then check this item.';}readingId=null;$('#reading').hidden=true;render();save();};
 $('#receipts').oninput=e=>{const key=e.target.dataset.field;if(!key)return;const r=state.receipts.find(x=>x.id===e.target.closest('[data-id]').dataset.id);C.editItem(r,key,e.target.value);updateCard(r);save();};
 $('#receipts').onchange=e=>{if(e.target.dataset.action!=='check')return;const r=state.receipts.find(x=>x.id===e.target.closest('[data-id]').dataset.id);r.checked=e.target.checked&&C.validItem(r);
  expandedReceipts.delete(r.id);
@@ -124,7 +138,7 @@ $('#receipts').onclick=async e=>{const button=e.target.closest('button[data-acti
  }
  if(action==='view'){const index=state.receipts.indexOf(r)+1;$('#photo-title').textContent=`Receipt ${index} · ${r.amount?money(C.pence(r.amount)||0):'Check amount'}`;$('#large-photo').src=r.image;$('#photo-dialog').showModal();}
  if(action==='remove'&&confirm('Remove this receipt from the draft?')){expandedReceipts.delete(r.id);state.receipts=state.receipts.filter(x=>x!==r);render();save();}
- if(action==='read')await readReceipt(r);
+ if(action==='read'&&!importingPhotos)await readReceipt(r);
  if(action==='rotate'){try{const image=new Image();image.src=r.image;await image.decode();const canvas=document.createElement('canvas');canvas.width=image.height;canvas.height=image.width;const ctx=canvas.getContext('2d');ctx.translate(canvas.width/2,canvas.height/2);ctx.rotate(Math.PI/2);ctx.drawImage(image,-image.width/2,-image.height/2);C.editItem(r,'image',canvas.toDataURL('image/jpeg',.92));r.note='Photo rotated. Check the details again.';render();save();}catch{notify('Could not rotate this photo.',true);}}
 };
 $('#close-photo').onclick=()=>$('#photo-dialog').close();
@@ -161,5 +175,5 @@ $('#close-save').onclick=()=>{$('#save-dialog').close();pendingPDF=null;};
 $('#save-dialog').onclose=()=>{pendingPDF=null;};
 async function prepareSavePicker(name){try{const picker=PdfSave.prepare(name);if(picker)await picker;return picker;}catch(err){if(err.name==='AbortError')throw err;return null;}}
 $('#save-file').onclick=async()=>{if(!pendingPDF)return;const file=pendingPDF;$('#save-file').disabled=true;try{const picker=await prepareSavePicker(file.name);const result=await PdfSave.save(file,{picker,download});saveResult(result);$('#save-result').textContent=result==='saved'?'PDF saved.':result==='device'?'File options closed. If you chose Save to Files, your PDF is saved there.':'Download requested. Check your browser’s Downloads.';}catch(err){$('#save-result').textContent=err.name==='AbortError'?'Saving cancelled. Tap Save PDF to try again.':err.message||'Could not save this PDF. Try opening the app in Safari or Chrome.';}finally{$('#save-file').disabled=false;}};
-$('#create-claim').onclick=async()=>{if(pdfSaving)return;let picker=null;try{if(readingId||!C.canCreate(state))throw Error('Check every item before downloading your claim.');const snapshot=structuredClone(state),name=`Expenses-${snapshot.engineer.replace(/[^A-Za-z0-9 -]/g,'').trim().replace(/\s+/g,'-')||'Engineer'}-${snapshot.claimDate}.pdf`;pdfSaving=true;summary();picker=await prepareSavePicker(name);const file=new File([buildPDF(snapshot).output('blob')],name,{type:'application/pdf'});try{saveResult(await PdfSave.save(file,{picker,download}));}catch(err){if(err.name==='AbortError'){notify('Saving cancelled. Your draft is still saved.');return;}showSaveDialog(file,'The save window could not open. Tap Save PDF to try again.');}}catch(err){if(err.name==='AbortError')notify('Saving cancelled. Your draft is still saved.');else notify(err.message||'Could not save the PDF. Export a backup and try again.',true);}finally{pdfSaving=false;summary();}};
+$('#create-claim').onclick=async()=>{if(pdfSaving)return;let picker=null;try{if(readingId||importingPhotos||!C.canCreate(state))throw Error('Check every item before downloading your claim.');const snapshot=structuredClone(state),name=`Expenses-${snapshot.engineer.replace(/[^A-Za-z0-9 -]/g,'').trim().replace(/\s+/g,'-')||'Engineer'}-${snapshot.claimDate}.pdf`;pdfSaving=true;summary();picker=await prepareSavePicker(name);const file=new File([buildPDF(snapshot).output('blob')],name,{type:'application/pdf'});try{saveResult(await PdfSave.save(file,{picker,download}));}catch(err){if(err.name==='AbortError'){notify('Saving cancelled. Your draft is still saved.');return;}showSaveDialog(file,'The save window could not open. Tap Save PDF to try again.');}}catch(err){if(err.name==='AbortError')notify('Saving cancelled. Your draft is still saved.');else notify(err.message||'Could not save the PDF. Export a backup and try again.',true);}finally{pdfSaving=false;summary();}};
 init();
