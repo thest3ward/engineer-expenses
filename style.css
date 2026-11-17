@@ -44,6 +44,23 @@ body { max-width:100%; }
 .receipt-toggle strong { white-space:nowrap; }
 .receipt-details { margin-top:14px; }
 .receipt-details select { width:100%; min-width:0; padding:9px 10px; font:inherit; font-size:16px; color:inherit; border:1px solid #ccd9d2; border-radius:7px; background:white; }
+
+.form-picker { display:flex; align-items:end; gap:10px; margin-bottom:12px; }
+.form-picker label { flex:1; min-width:0; }
+select { width:100%; min-width:0; font:inherit; font-size:16px; padding:10px; border:1px solid #ccd6d5; border-radius:7px; background:#fff; color:#183440; }
+.form-picker button { flex-shrink:0; min-height:44px; }
+#form-reference { overflow-wrap:anywhere; font-size:11px; }
+#form-purpose { margin-bottom:18px; font-weight:650; }
+.missing-field, input[aria-invalid="true"], select[aria-invalid="true"] { border:2px solid #b93727!important; background:#fff4ee!important; }
+.missing-field:focus { outline:2px solid #eeb061; }
+#mileage-tools { padding-top:0; }
+#mileage-tools > button { min-height:44px; }
+#mileage-tools label { margin-top:12px; }
+#form-dialog label, #mileage-dialog label { margin:14px 0; }
+#form-dialog select, #mileage-dialog input { font-size:16px; }
+#mileage-error { color:#b93727; }
+.mileage-value { font-size:13px; font-weight:650; }
+#download-receipts { margin-top:10px; }
 .add-another { margin:12px 0 18px; }
 .receipt-add-buttons { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
 .receipt-add-buttons button { min-height:44px; }

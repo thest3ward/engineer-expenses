@@ -1,7 +1,8 @@
 'use strict';
 const C=ExpenseCore,$=s=>document.querySelector(s),money=n=>new Intl.NumberFormat('en-GB',{style:'currency',currency:'GBP'}).format(n/100);
 const today=()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;};
-let state={engineer:'',claimDate:today(),receipts:[]},db,worker,readingId=null,readToken=0,saving=Promise.resolve(),saveFailed=false,noticeTimer,pdfSaving=false,pendingPDF=null;
+let workspace=ClaimForms.load(null,{date:today()});
+let state=workspace.forms[0],legacySnapshot=null,db,worker,readingId=null,readToken=0,saving=Promise.resolve(),saveFailed=false,noticeTimer,pdfSaving=false,pendingPDF=null;
 const expandedReceipts=new Set();
 let importingPhotos=false;
 let cancelCurrentRead=null;
@@ -9,31 +10,62 @@ const escapeHtml=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;'
 function notify(message,error=false){$('#notice').textContent=message;$('#notice').className=error?'error':'';$('#notice').hidden=false;clearTimeout(noticeTimer);noticeTimer=setTimeout(()=>$('#notice').hidden=true,error?12000:5500);}
 function requestResult(req){return new Promise((resolve,reject)=>{req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);});}
 async function init(){
- try{const req=indexedDB.open('engineer-expenses',1);req.onupgradeneeded=()=>req.result.createObjectStore('draft');db=await requestResult(req);const saved=await requestResult(db.transaction('draft').objectStore('draft').get('current'));if(saved){state=saved;state.receipts.forEach(r=>{if(r.reading){r.checked=false;r.note='Reading was interrupted. Enter the details or read the photo again.';}r.reading=false;});}$('#save-status').textContent='Draft saved on this device';}
+ try{const req=indexedDB.open('engineer-expenses',1);req.onupgradeneeded=()=>req.result.createObjectStore('draft');db=await requestResult(req);const saved=await requestResult(db.transaction('draft').objectStore('draft').get('current'));if(saved){workspace=ClaimForms.load(saved,{date:today()});state=workspace.forms.find(f=>f.id===workspace.activeFormId);if(saved.version!==2)legacySnapshot=structuredClone(saved);}$('#save-status').textContent='Draft saved on this device';}
  catch(e){saveFailed=true;$('#save-status').textContent='Draft saving unavailable';notify('This browser cannot save your draft. Export a backup before closing.',true);}
- $('#engineer').value=state.engineer;$('#claim-date').value=state.claimDate;render();renderSignature();
+ showForm();if(legacySnapshot)save();
 }
 function save(){
- const snapshot=structuredClone(state);if(!db)return;
+ const snapshot=structuredClone(workspace);if(!db)return;
  $('#save-status').textContent='Saving…';
- saving=saving.catch(()=>{}).then(()=>new Promise((resolve,reject)=>{const tx=db.transaction('draft','readwrite');tx.objectStore('draft').put(snapshot,'current');tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error);})).then(()=>{saveFailed=false;$('#save-status').textContent='Draft saved on this device';}).catch(()=>{saveFailed=true;$('#save-status').textContent='Not saved — export a backup';notify('Could not save the draft. Storage may be full. Export a backup before closing.',true);});
+ saving=saving.catch(()=>{}).then(()=>new Promise((resolve,reject)=>{const tx=db.transaction('draft','readwrite');tx.objectStore('draft').put(snapshot,'current');if(legacySnapshot)tx.objectStore('draft').put(legacySnapshot,'before-multiple-forms');tx.oncomplete=()=>{legacySnapshot=null;resolve();};tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error);})).then(()=>{saveFailed=false;$('#save-status').textContent='Draft saved on this device';}).catch(()=>{saveFailed=true;$('#save-status').textContent='Not saved — export a backup';notify('Could not save the draft. Storage may be full. Export a backup before closing.',true);});
 }
 function summary(){
- const count=state.receipts.length,checked=state.receipts.filter(r=>r.checked&&C.validItem(r)).length,total=state.receipts.reduce((sum,r)=>sum+(C.pence(r.amount)||0),0);
- $('#total').textContent=money(total);$('#receipt-count').textContent=count;$('#items-summary').textContent=count?`${count} expense${count===1?'':'s'} · GBP`:'No expenses yet';$('#checked-count').textContent=`${checked} / ${count}`;$('#checked-progress').max=count||1;$('#checked-progress').value=checked;
- let message=!count?'Add your first receipt to get started.':checked<count?`${count-checked} item${count-checked===1?' needs':'s need'} checking against the receipt photo.`:!state.engineer.trim()?'Enter the engineer’s name above.':!C.validDate(state.claimDate)?'Enter a valid claim date.':'All items checked. Your claim is ready.';
+ const count=state.receipts.length,checked=state.receipts.filter(r=>r.checked&&C.validItem(r)).length;
+ const totals=C.totals(state),adding=importingPhotos||!!readingId,busy=adding||pdfSaving;
+ $('#total').textContent=money(totals.total);
+ $('#receipt-count').textContent=count;
+ $('#items-summary').textContent=count?`${count} expense${count===1?'':'s'} · GBP`:'No expenses yet';
+ $('#owed-summary').textContent=state.paymentType==='card'?'Owed to employee: '+money(0):`Owed to employee${totals.pending?' before mileage payment':''}: ${money(totals.owed)}`;
+ $('#mileage-summary').textContent=totals.miles?`${totals.miles.toFixed(2)} miles${totals.pending?' · payment to be calculated by accounts':' · '+money(totals.mileageAmount)}`:'';
+ $('#checked-count').textContent=`${checked} / ${count}`;$('#checked-progress').max=count||1;$('#checked-progress').value=checked;
+ let message=!count?'Add your first expense to get started.':checked<count?`${count-checked} expense${count-checked===1?' needs':'s need'} completing and checking.`:!state.engineer.trim()?'Enter the engineer’s name above.':!C.validDate(state.claimDate)?'Enter a valid claim date.':'All expenses checked. This form is ready.';
  if(readingId)message='Finish reading or choose Enter manually, then check the item.';
  else if(importingPhotos)message='Adding receipt photos…';
- const adding=importingPhotos||!!readingId;
- $('#gate-message').textContent=message;$('#create-claim').disabled=!C.canCreate(state)||adding||pdfSaving;$('#preview-claim').disabled=!count;
- for(const id of ['camera','upload','another-camera','another-upload'])$('#'+id).disabled=adding;
- $('#add-another').hidden=!count;$('#new-claim').disabled=$('#restore').disabled=adding;
+ $('#gate-message').textContent=message;
+ $('#create-claim').disabled=!C.canCreate(state)||busy;
+ $('#download-receipts').disabled=!C.canCreate(state)||busy||!state.receipts.some(r=>r.kind!=='mileage');
+ $('#preview-claim').disabled=!count||pdfSaving;
+ for(const id of ['camera','upload','another-camera','another-upload','add-mileage'])$('#'+id).disabled=busy;
+ for(const id of ['new-claim','restore','form-select','add-form','mileage-rate'])$('#'+id).disabled=busy;
+ $('#add-another').hidden=!count;
+ $('#mileage-tools').hidden=state.paymentType==='card';
+ renderFormControls();
+}
+function renderFormControls(){
+ $('#form-select').innerHTML=workspace.forms.map((form,i)=>`<option value="${escapeHtml(form.id)}">${i+1}. ${form.paymentType==='card'?'Company card':'Personal'} · ${dateText(form.claimDate)}</option>`).join('');
+ $('#form-select').value=state.id;
+ $('#form-reference').textContent=state.reference;
+ $('#form-purpose').textContent=state.paymentType==='card'?'Company credit card expenditure':'Personal expense reimbursement';
+}
+function showForm(){
+ $('#engineer').value=state.engineer;$('#claim-date').value=state.claimDate;$('#mileage-rate').value=state.mileageRate;
+ expandedReceipts.clear();render();renderSignature();
+}
+function fieldsValidation(r,element){
+ for(const key of ['category','description']){
+  const field=element.querySelector(`[data-field="${key}"]`);
+  if(!field)continue;
+  const missing=key==='category'?!C.claimTypes.includes(r.category):!r.description.trim();
+  field.classList.toggle('missing-field',missing);
+  field.setAttribute('aria-invalid',String(missing));
+ }
 }
 function receiptDescription(r){
  const category=C.claimTypes.includes(r.category)?r.category:'';
  return [category,r.description.trim()].filter(Boolean).join(' - ');
 }
 function card(r,i){
+ if(r.kind==='mileage')return mileageCard(r,i);
  const number=String(i+1).padStart(2,'0');
  const checked=r.checked&&C.validItem(r), collapsed=checked&&!expandedReceipts.has(r.id);
  const detailsId='receipt-details-'+r.id;
@@ -51,15 +83,15 @@ function card(r,i){
  <div class="expense-fields">
  <label>Date<input type="date" data-field="date" value="${escapeHtml(r.date)}" aria-label="Date for receipt ${i+1}"></label>
  <label>Amount incl. VAT (£)<input type="text" inputmode="decimal" data-field="amount" maxlength="10" placeholder="0.00" value="${escapeHtml(r.amount)}" aria-label="Amount including VAT for receipt ${i+1}"></label>
- <label class="description">Claim type<select data-field="category" aria-label="Claim type for receipt ${i+1}"><option value="">Select a type</option>${options}</select></label>
- <label class="description">Description${r.category===undefined?' / supplier':' (optional)'}<input type="text" maxlength="160" data-field="description" placeholder="e.g. Parking at site" value="${escapeHtml(r.description)}" aria-label="Description for receipt ${i+1}"></label>
+ <label class="description">Expense Type (required)<select required data-field="category" aria-label="Expense Type for receipt ${i+1}"><option value="">Select a type</option>${options}</select></label>
+ <label class="description">Notes (required)<input type="text" required maxlength="160" data-field="description" placeholder="e.g. Parking at site" value="${escapeHtml(r.description)}" aria-label="Notes for receipt ${i+1}"></label>
  </div></div>
  <label class="check"><input type="checkbox" data-action="check" ${checked?'checked':''} ${C.validItem(r)?'':'disabled'}>I’ve checked the photo, date, claim details and amount.</label>
  <p class="receipt-hint">${escapeHtml(r.note||'Fill in the details, then check this item.')} <button class="text-button" data-action="read" ${readingId||importingPhotos?'disabled':''}>Read photo again</button></p>
  </div></article>`;
 }
-function render(){const focusId=document.activeElement?.closest('[data-id]')?.dataset.id,field=document.activeElement?.dataset.field;$('#receipts').innerHTML=state.receipts.map(card).join('');$('#empty').hidden=!!state.receipts.length;summary();if(focusId&&field)$(`[data-id="${focusId}"] [data-field="${field}"]`)?.focus();}
-function updateCard(r){const el=$(`[data-id="${r.id}"]`);el.classList.toggle('checked',r.checked);el.querySelector('.badge').textContent=r.checked?'Checked':'Needs checking';el.querySelector('.receipt-toggle').hidden=!r.checked;const check=el.querySelector('[data-action="check"]');check.checked=r.checked;check.disabled=!C.validItem(r);summary();}
+function render(){const focusId=document.activeElement?.closest('[data-id]')?.dataset.id,field=document.activeElement?.dataset.field;$('#receipts').innerHTML=state.receipts.map(card).join('');$('#empty').hidden=!!state.receipts.length;$('#receipts').querySelectorAll('[data-id]').forEach(el=>{const r=state.receipts.find(r=>r.id===el.dataset.id);fieldsValidation(r,el);});summary();if(focusId&&field)$(`[data-id="${focusId}"] [data-field="${field}"]`)?.focus();}
+function updateCard(r){const el=$(`[data-id="${r.id}"]`);el.classList.toggle('checked',r.checked);el.querySelector('.badge').textContent=r.checked?'Checked':'Needs checking';el.querySelector('.receipt-toggle').hidden=!r.checked;const check=el.querySelector('[data-action="check"]');check.checked=r.checked;check.disabled=!C.validItem(r);fieldsValidation(r,el);if(r.kind==='mileage')el.querySelector('.mileage-value').textContent=mileageValue(r);summary();}
 $('#engineer').addEventListener('input',e=>{state.engineer=e.target.value;summary();save();});
 $('#claim-date').addEventListener('input',e=>{state.claimDate=e.target.value;summary();save();});
 const signaturePad=$('#signature-pad');let signaturePointer=null;
@@ -143,37 +175,115 @@ $('#receipts').onclick=async e=>{const button=e.target.closest('button[data-acti
 };
 $('#close-photo').onclick=()=>$('#photo-dialog').close();
 function download(blob,name){const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);}
-$('#backup').onclick=()=>download(new Blob([JSON.stringify({format:'engineer-expenses',version:1,claim:state})],{type:'application/json'}),`expenses-backup-${today()}.json`);
+$('#backup').onclick=()=>download(new Blob([JSON.stringify({format:'engineer-expenses',version:2,workspace})],{type:'application/json'}),'expenses-all-forms-backup-'+today()+'.json');
 $('#restore').onclick=()=>$('#backup-file').click();
-$('#backup-file').onchange=async e=>{const file=e.target.files[0];e.target.value='';if(!file)return;try{if(file.size>100*1024*1024)throw Error('Backup file is too large.');const data=JSON.parse(await file.text()),s=data.claim;if(data.format!=='engineer-expenses'||data.version!==1||!s||typeof s.engineer!=='string'||s.engineer.length>80||typeof s.claimDate!=='string'||!Array.isArray(s.receipts)||s.receipts.length>300)throw Error('This is not a supported expenses backup.');
- const receipts=[];for(const r of s.receipts){if(!r||typeof r.image!=='string'||r.image.length>30*1024*1024||!/^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(r.image)||['date','amount','description'].some(k=>typeof r[k]!=='string')||r.description.length>160||r.date.length>10||r.amount.length>10)throw Error('The backup contains an invalid receipt.');const img=new Image();img.src=r.image;await img.decode();receipts.push({id:crypto.randomUUID(),image:r.image,date:r.date,amount:r.amount,description:r.description,...(r.category===undefined?{}:{category:C.claimTypes.includes(r.category)?r.category:''}),checked:false,reading:false,note:'Restored from backup. Check this item again.'});}
- const signature=C.cleanSignature(s.signature);if(state.receipts.length&&!confirm('Replace the current draft with this backup? Export your current draft first if you need to keep it.'))return;state={engineer:s.engineer,claimDate:s.claimDate,receipts,signature};$('#engineer').value=state.engineer;$('#claim-date').value=state.claimDate;render();renderSignature();save();notify('Backup restored. Check each item before creating the claim.');}catch(err){notify(err.message||'Could not restore that backup.',true);}};
-$('#new-claim').onclick=()=>{if(!confirm('Start a new claim? Download your claim PDF or export a backup first. This clears the current draft.'))return;state={engineer:state.engineer,claimDate:today(),receipts:[],signature:[]};$('#claim-date').value=state.claimDate;render();renderSignature();save();};
+$('#backup-file').onchange=async e=>{
+ const file=e.target.files[0];e.target.value='';if(!file||importingPhotos||readingId||pdfSaving)return;
+ try{
+  const data=JSON.parse(await file.text()),forms=ClaimForms.validateBackup(data);
+  for(const form of forms)for(const receipt of form.receipts)if(receipt.kind!=='mileage'){const image=new Image();image.src=receipt.image;await image.decode();}
+  const imports=forms.map(form=>{
+   const copy=ClaimForms.normalise(form);
+   if(workspace.forms.some(existing=>existing.id===copy.id||existing.reference===copy.reference)){const fresh=ClaimForms.create();copy.id=fresh.id;copy.reference=fresh.reference;}
+   copy.receipts.forEach(r=>{r.id=crypto.randomUUID();r.checked=false;r.reading=false;r.note='Imported from backup. Check this expense again.';});
+   return copy;
+  });
+  workspace.forms.push(...imports);workspace.activeFormId=imports[0].id;state=imports[0];
+  showForm();save();notify('Backup imported as additional forms. Check each expense before downloading.');
+ }catch(err){notify(err.message||'Could not import that backup.',true);}
+};
+function newFormDialog(){
+ if(importingPhotos||readingId||pdfSaving)return;
+ $('#new-form-type').value='personal';$('#form-dialog').showModal();
+}
+$('#add-form').onclick=newFormDialog;$('#new-claim').onclick=newFormDialog;
+$('#close-form').onclick=()=>$('#form-dialog').close();
+$('#new-form-fields').onsubmit=e=>{
+ e.preventDefault();if(importingPhotos||readingId||pdfSaving)return;
+ const form=ClaimForms.create({engineer:state.engineer,date:today(),paymentType:$('#new-form-type').value,mileageRate:state.mileageRate});
+ workspace.forms.push(form);workspace.activeFormId=form.id;state=form;$('#form-dialog').close();showForm();save();
+};
+$('#form-select').onchange=e=>{
+ if(importingPhotos||readingId||pdfSaving)return;
+ const form=workspace.forms.find(f=>f.id===e.target.value);if(!form)return;
+ state=form;workspace.activeFormId=form.id;showForm();save();
+};
+$('#mileage-rate').onchange=e=>{
+ const rate=e.target.value.trim();
+ if(rate!==''&&C.mileagePence('1',rate)===null){e.target.setAttribute('aria-invalid','true');notify('Enter a positive company-approved rate, or leave it blank for accounts.',true);e.target.value=state.mileageRate;return;}
+ e.target.removeAttribute('aria-invalid');state.mileageRate=rate;
+ state.receipts.filter(r=>r.kind==='mileage').forEach(r=>{C.editItem(r,'rate',rate);});
+ render();save();
+};
+function mileageValue(r){const value=C.itemPence(r);return value===null?'Payment to be calculated by accounts':money(value)+' at £'+r.rate+' per mile';}
+function mileageCard(r,i){
+ const checked=r.checked&&C.validItem(r),collapsed=checked&&!expandedReceipts.has(r.id),details='receipt-details-'+r.id;
+ return `<article class="receipt ${checked?'checked':''}" data-id="${r.id}">
+ <div class="receipt-top" ${collapsed?'hidden':''}><h3>Expense ${i+1} · Personal vehicle mileage</h3><span class="badge">${checked?'Checked':'Needs checking'}</span></div>
+ <button type="button" class="receipt-toggle" data-action="toggle" aria-controls="${details}" aria-expanded="${!collapsed}" ${checked?'':'hidden'}><span class="receipt-toggle-label">✓ Mileage</span><span>${dateText(r.date)}</span><strong>${escapeHtml(r.miles)} mi</strong><span>${collapsed?'▾':'▴'}</span></button>
+ <div id="${details}" class="receipt-details" ${collapsed?'hidden':''}><div class="expense-fields">
+ <label>Date<input type="date" data-field="date" value="${escapeHtml(r.date)}"></label>
+ <label>Distance (miles)<input type="text" inputmode="decimal" data-field="miles" value="${escapeHtml(r.miles)}" maxlength="10"></label>
+ <label class="description">Journey details / Notes (required)<input data-field="description" required maxlength="160" value="${escapeHtml(r.description)}"></label>
+ </div><p class="mileage-value">${escapeHtml(mileageValue(r))}</p><p class="pack-note">Own personal vehicle used for this work journey.</p>
+ <label class="check"><input type="checkbox" data-action="check" ${checked?'checked':''} ${C.validItem(r)?'':'disabled'}>I’ve checked the date, journey details and miles.</label>
+ <button class="text-button remove" data-action="remove">Remove mileage</button></div></article>`;
+}
+$('#add-mileage').onclick=()=>{
+ if(state.paymentType==='card'||importingPhotos||readingId||pdfSaving)return;
+ $('#mileage-date').value=today();$('#mileage-notes').value='';$('#mileage-miles').value='';$('#personal-vehicle').checked=false;$('#mileage-error').textContent='';$('#mileage-dialog').showModal();
+};
+$('#close-mileage').onclick=()=>$('#mileage-dialog').close();
+$('#mileage-fields').onsubmit=e=>{
+ e.preventDefault();if(state.paymentType==='card')return;
+ const r={id:crypto.randomUUID(),kind:'mileage',category:'Mileage',date:$('#mileage-date').value,description:$('#mileage-notes').value.trim(),miles:$('#mileage-miles').value.trim(),rate:state.mileageRate,personalVehicle:$('#personal-vehicle').checked,amount:'',checked:false,reading:false};
+ if(!C.validItem(r)){$('#mileage-error').textContent='Complete the date, journey details, miles and personal vehicle confirmation.';return;}
+ state.receipts.push(r);$('#mileage-dialog').close();render();save();$('[data-id="'+r.id+'"]').scrollIntoView({block:'nearest'});
+};
 function dateText(s){return C.validDate(s)?s.split('-').reverse().join('/'):'Not entered';}
 function ascii(s){return String(s).replace(/[\u2018\u2019]/g,"'").replace(/[\u2013\u2014]/g,'-').replace(/[^\x20-\x7e\u00a0-\u00ff]/g,'?');}
-function drawPDFSignature(pdf,strokes,left,baseline){const points=strokes.flat();if(!points.length)return;const xs=points.map(p=>p.x*1000),ys=points.map(p=>p.y*400),minX=Math.min(...xs),minY=Math.min(...ys),w=Math.max(1,Math.max(...xs)-minX),h=Math.max(1,Math.max(...ys)-minY),scale=Math.min(90/w,17/h);pdf.setDrawColor(24,52,64);pdf.setFillColor(24,52,64);pdf.setLineWidth(.45);const x=p=>left+(p.x*1000-minX)*scale,y=p=>baseline-2-h*scale+(p.y*400-minY)*scale;for(const stroke of strokes){if(stroke.length===1)pdf.circle(x(stroke[0]),y(stroke[0]),.3,'F');for(let i=1;i<stroke.length;i++)pdf.line(x(stroke[i-1]),y(stroke[i-1]),x(stroke[i]),y(stroke[i]));}}
-function buildPDF(claim,{preview=false}={}){
- if(preview?!claim.receipts.length:!C.canCreate(claim))throw Error(preview?'Add a receipt to preview the claim.':'Check every valid item and fill in your name and claim date first.');
- const pdf=new jspdf.jsPDF({unit:'mm',format:'a4',compress:true}),total=claim.receipts.reduce((n,r)=>n+(C.pence(r.amount)||0),0),pageW=210,name=claim.engineer.trim()||'Not entered';let y;
- const itemAmount=r=>C.pence(r.amount)!==null?money(C.pence(r.amount)):'Not entered';
- const text=(str,x,y,size=10,style='normal')=>{pdf.setFont('helvetica',style);pdf.setFontSize(size);pdf.setTextColor(25,44,51);pdf.text(Array.isArray(str)?str.map(ascii):ascii(str),x,y);};
- function heading(continued=false){text('Expenses Claim Form',17,23,21,'bold');text(continued?'Continued':'Engineer expenses',17,31,9);text(`Name: ${name}`,17,44,11);text(`Claim date: ${dateText(claim.claimDate)}`,17,52,10);pdf.setFillColor(232,238,234);pdf.rect(17,61,176,10,'F');text('Receipt',20,67.5,9,'bold');text('Date',40,67.5,9,'bold');text('Claim type / description',69,67.5,9,'bold');text('Gross value',166,67.5,9,'bold');y=71;}
- heading();
- claim.receipts.forEach((r,i)=>{const lines=pdf.splitTextToSize(ascii(receiptDescription(r)||'Not entered'),89),height=Math.max(12,lines.length*4.7+7);if(y+height>239){pdf.addPage();heading(true);}pdf.setDrawColor(215,223,216);pdf.line(17,y+height,193,y+height);text(String(i+1).padStart(2,'0'),20,y+7,9);text(dateText(r.date),40,y+7,9);text(lines,69,y+7,9);pdf.setFont('helvetica','normal');pdf.setFontSize(10);pdf.text(itemAmount(r),190,y+7,{align:'right'});y+=height;});
- if(y>154){pdf.addPage();text('Expenses Claim Form',17,23,21,'bold');text(`Name: ${name}`,17,35,11);text(`Claim date: ${dateText(claim.claimDate)}`,17,43,10);y=53;}
- y+=13;pdf.setFillColor(232,238,234);pdf.rect(17,y-7,176,14,'F');text(preview?'DRAFT TOTAL OF ENTERED AMOUNTS':'TOTAL CLAIMED BY EMPLOYEE',21,y+2,10,'bold');pdf.setFont('helvetica','bold');pdf.text(money(total),189,y+2,{align:'right'});y+=22;
- y+=8;text('Employee signature:',17,y,10);pdf.setDrawColor(110,125,126);pdf.setLineWidth(.2);pdf.line(52,y+1,150,y+1);drawPDFSignature(pdf,C.cleanSignature(claim.signature),54,y);y+=13;text('Approved by A/C: ______________________________________',17,y,10);y+=13;text('Approved by manager: __________________________________',17,y,10);y+=13;text('Total approved by accounts: £ ____________________________',17,y,10);y+=13;text('Total to be reimbursed: £ ________________________________',17,y,10);y+=13;
- const note=pdf.splitTextToSize('Please sign this form and send it with the attached VAT receipts to your line manager. Claims remain subject to the limits in the employee handbook and office approval.',176);text(note,17,y,8);
- claim.receipts.forEach((r,i)=>{pdf.addPage();text(`Receipt ${String(i+1).padStart(2,'0')}`,17,22,18,'bold');text(`${dateText(r.date)}  |  ${itemAmount(r)}`,17,31,10);const lines=pdf.splitTextToSize(ascii(receiptDescription(r)||'Not entered'),176);text(lines,17,39,10);const top=45+lines.length*4.5,props=pdf.getImageProperties(r.image),maxW=176,maxH=274-top,scale=Math.min(maxW/props.width,maxH/props.height),w=props.width*scale,h=props.height*scale;pdf.addImage(r.image,'JPEG',(pageW-w)/2,top,w,h,undefined,'FAST');if(preview&&!(r.checked&&C.validItem(r))){pdf.setFont('helvetica','bold');pdf.setFontSize(Math.min(34,w/2.8));pdf.setTextColor(210,25,25);pdf.text('NOT CHECKED',pageW/2,top+h/2,{align:'center',angle:25});}});
- const pages=pdf.getNumberOfPages();for(let i=1;i<=pages;i++){pdf.setPage(i);if(preview){pdf.setFont('helvetica','bold');pdf.setFontSize(9);pdf.setTextColor(210,25,25);pdf.text('PREVIEW - NOT FOR SUBMISSION',17,278);}pdf.setDrawColor(220,226,221);pdf.line(17,282,193,282);text(`${name} | ${dateText(claim.claimDate)}`,17,288,8);pdf.setFontSize(8);pdf.text(`${i} / ${pages}`,193,288,{align:'right'});}
- pdf.setProperties({title:`Expenses Claim - ${ascii(claim.engineer)} - ${claim.claimDate}`,subject:'Expenses claim and receipt pack',creator:'Engineer Expenses'});return pdf;
+function buildPDF(claim,{preview=false}={}){return ClaimExport.receiptPDF(claim,{preview});}
+$('#preview-claim').onclick=()=>{
+ try{
+  if(!state.receipts.length)throw Error('Add an expense to preview the form.');
+  const view=window.open('about:blank','_blank');if(!view)throw Error('Allow pop-ups to preview the claim.');
+  view.opener=null;view.document.open();view.document.write(ClaimExport.preview(structuredClone(state)));view.document.close();
+ }catch(error){notify(error.message,true);}
+};
+function showSaveDialog(file,message=''){
+ pendingPDF=file;$('#save-file-name').textContent=file.name;
+ $('#save-instructions').textContent=PdfSave.shareable(file)?'Tap Save file, then choose Save to Files and select a folder.':'Tap Save file to download to your device.';
+ $('#save-result').textContent=message;$('#save-dialog').showModal();
 }
-$('#preview-claim').onclick=()=>{try{const pdf=buildPDF(structuredClone(state),{preview:true}),url=URL.createObjectURL(pdf.output('blob')),view=window.open('about:blank','_blank');if(!view){URL.revokeObjectURL(url);throw Error('Allow pop-ups for this site to open the PDF preview.');}view.opener=null;view.location.replace(url);setTimeout(()=>URL.revokeObjectURL(url),600000);notify('Preview opened. Unchecked receipt photos are stamped NOT CHECKED in red.');}catch(err){notify(err.message||'Could not open the preview.',true);}};
-function showSaveDialog(file,message=''){pendingPDF=file;$('#save-file-name').textContent=file.name;const native=PdfSave.shareable(file);$('#save-instructions').textContent=native?'Tap Save PDF to open your device’s file options. On iPhone, choose Save to Files, choose a folder and tap Save.':'Tap Save PDF to download the file. If your app opens a preview instead, open the expenses app in your phone’s Safari or Chrome browser and try again.';$('#save-result').textContent=message;$('#save-dialog').showModal();}
-function saveResult(result){if(result==='saved')notify('PDF saved to your chosen folder.');else if(result==='device')notify('Your device handled the PDF. Save to Files saves it on your phone.');else notify('Download requested. Check your browser’s Downloads.');}
-$('#close-save').onclick=()=>{$('#save-dialog').close();pendingPDF=null;};
+function saveResult(result){notify(result==='saved'?'File saved.':result==='device'?'Choose Save to Files in your device’s save options.':'Download requested. Check your Downloads folder.');}
+async function saveExport(file,picker=null){
+ try{saveResult(await PdfSave.save(file,{picker,download}));}
+ catch(error){if(error.name==='AbortError'){notify('Saving cancelled.');return;}showSaveDialog(file,'Tap Save file to try again.');}
+}
+$('#close-save').onclick=()=>$('#save-dialog').close();
 $('#save-dialog').onclose=()=>{pendingPDF=null;};
-async function prepareSavePicker(name){try{const picker=PdfSave.prepare(name);if(picker)await picker;return picker;}catch(err){if(err.name==='AbortError')throw err;return null;}}
-$('#save-file').onclick=async()=>{if(!pendingPDF)return;const file=pendingPDF;$('#save-file').disabled=true;try{const picker=await prepareSavePicker(file.name);const result=await PdfSave.save(file,{picker,download});saveResult(result);$('#save-result').textContent=result==='saved'?'PDF saved.':result==='device'?'File options closed. If you chose Save to Files, your PDF is saved there.':'Download requested. Check your browser’s Downloads.';}catch(err){$('#save-result').textContent=err.name==='AbortError'?'Saving cancelled. Tap Save PDF to try again.':err.message||'Could not save this PDF. Try opening the app in Safari or Chrome.';}finally{$('#save-file').disabled=false;}};
-$('#create-claim').onclick=async()=>{if(pdfSaving)return;let picker=null;try{if(readingId||importingPhotos||!C.canCreate(state))throw Error('Check every item before downloading your claim.');const snapshot=structuredClone(state),name=`Expenses-${snapshot.engineer.replace(/[^A-Za-z0-9 -]/g,'').trim().replace(/\s+/g,'-')||'Engineer'}-${snapshot.claimDate}.pdf`;pdfSaving=true;summary();picker=await prepareSavePicker(name);const file=new File([buildPDF(snapshot).output('blob')],name,{type:'application/pdf'});try{saveResult(await PdfSave.save(file,{picker,download}));}catch(err){if(err.name==='AbortError'){notify('Saving cancelled. Your draft is still saved.');return;}showSaveDialog(file,'The save window could not open. Tap Save PDF to try again.');}}catch(err){if(err.name==='AbortError')notify('Saving cancelled. Your draft is still saved.');else notify(err.message||'Could not save the PDF. Export a backup and try again.',true);}finally{pdfSaving=false;summary();}};
+$('#save-file').onclick=async()=>{
+ if(!pendingPDF)return;
+ $('#save-file').disabled=true;
+ try{await saveExport(pendingPDF);}finally{$('#save-file').disabled=false;}
+};
+async function exportClaim(kind){
+ if(pdfSaving||readingId||importingPhotos)return;
+ try{
+  if(!C.canCreate(state))throw Error('Complete Expense Type and Notes, then check every expense before downloading.');
+  const snapshot=structuredClone(state),extension=kind==='word'?'docx':'pdf',name=snapshot.reference+(kind==='word'?'-claim.':'-receipts.')+extension;
+  pdfSaving=true;summary();
+  let picker=null;
+  if(typeof window.showSaveFilePicker==='function'){
+   const mime=kind==='word'?'application/vnd.openxmlformats-officedocument.wordprocessingml.document':'application/pdf';
+   try{picker=window.showSaveFilePicker({suggestedName:name,types:[{description:kind==='word'?'Word document':'Receipt PDF',accept:{[mime]:['.'+extension]}}]});await picker;}catch(error){if(error.name==='AbortError')return;picker=null;}
+  }
+  const blob=kind==='word'?await ClaimExport.word(snapshot):buildPDF(snapshot).output('blob');
+  const file=new File([blob],name,{type:kind==='word'?'application/vnd.openxmlformats-officedocument.wordprocessingml.document':'application/pdf'});
+  if(PdfSave.shareable(file)&&!picker)showSaveDialog(file);else await saveExport(file,picker);
+ }catch(error){notify(error.message||'Could not create that file.',true);}
+ finally{pdfSaving=false;summary();}
+}
+$('#create-claim').onclick=()=>exportClaim('word');
+$('#download-receipts').onclick=()=>exportClaim('receipts');
 init();

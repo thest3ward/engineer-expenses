@@ -1,6 +1,6 @@
 # Engineer Expenses and Timesheets
 
-Phone-friendly expense claims with receipt photos, free local OCR, individual receipt checking, a finger signature pad, PDF preview and PDF download.
+Phone-friendly expense claims with receipt photos, free local OCR, individual receipt checking, a finger signature pad, claim preview, editable Word claim forms and separate receipt PDFs.
 
 ## Publish with GitHub Pages
 
@@ -12,11 +12,19 @@ Share the website link with engineers. Visitors do not need GitHub or ChatGPT ac
 
 ## How data is stored
 
-Receipt reading and PDF generation run in the browser. Receipts, details and signatures are saved in IndexedDB on the engineer's device. They are not committed to the repository or uploaded to a shared expenses server. Use Export backup before changing browsers or devices. Clearing browser site data removes saved drafts.
+Receipt reading, Word generation and receipt PDF generation run in the browser. Receipts, details and signatures are saved in IndexedDB on the engineer's device. They are not committed to the repository or uploaded to a shared expenses server. Use Export backup before changing browsers or devices. Clearing browser site data removes saved drafts.
 
 Drafts on the original ChatGPT-hosted trial do not transfer automatically to the GitHub Pages address. Export a backup on the old app, restore it on the new one and check the restored receipt items again.
 
-The PDF includes claim details, any drawn employee signature, office approval lines and numbered receipt photos. Preview allows incomplete drafts, with red NOT CHECKED stamps on unchecked photos. Final download requires all receipts to be valid and checked. Office submission and approval tracking are not connected.
+Each form exports an editable .docx claim with employee details, Expense Type, Notes, amounts, mileage and totals, plus a separate PDF of receipt photos. The files share a stable generated claim reference and expense item numbers. Word generation uses the included JSZip library and runs entirely in the browser without a Word installation. The drawn signature is embedded in the Word form. Claim preview permits incomplete drafts and flags unchecked receipts.
+
+Expense Type and Notes are required for every receipt to be checked. Edits clear the check, and checked valid items collapse to one line. Existing draft photos, amounts, notes and signatures are carried into a Personal form. Older receipts missing newly required fields need completion and rechecking. The first migration also keeps the original snapshot under the device's IndexedDB draft store.
+
+Use New form to create additional Personal or Company card forms. Transactions, totals, claim references and exports are owned by each form. Company card expenditure always contributes �0 to employee reimbursement. Forms and timesheets remain stored separately on the same device.
+
+Personal vehicle mileage is available on Personal forms. Enter the work date, journey Notes, distance in miles and personal vehicle confirmation. The default rate is blank, so miles are recorded and payment is explicitly pending accounts calculation. Mileage rate settings optionally accepts a company-approved GBP-per-mile rate. Setting a rate applies it to mileage on that form and clears its checks. Calculations round each mileage item to the nearest penny using integer arithmetic. Company vans are excluded.
+
+Export all forms backup creates a version 2 backup. Import supports original version 1 backups and version 2 collections, adding forms and requiring review again. Existing forms are retained. A duplicate imported form receives a fresh reference. Office submission and approval tracking remain manual.
 
 ## Dependencies
 
