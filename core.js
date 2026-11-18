@@ -2,7 +2,7 @@
  'use strict';
  function pence(value){const s=String(value??'').trim();if(!/^\d{1,7}(?:\.\d{1,2})?$/.test(s))return null;const [whole,frac='']=s.split('.');const n=Number(whole)*100+Number(frac.padEnd(2,'0'));return n>0?n:null;}
  function validDate(s){if(!/^\d{4}-\d{2}-\d{2}$/.test(s))return false;const d=new Date(s+'T12:00:00Z');return !isNaN(d)&&d.toISOString().slice(0,10)===s&&Number(s.slice(0,4))>=2000&&Number(s.slice(0,4))<=2100;}
- const claimTypes=Object.freeze(['Food','Tools','Parking','Consumables','Other']);
+ const claimTypes=Object.freeze(['Food','Food - 12 hour shift','Food - staying away breakfast','Food - staying away lunch','Food - staying away dinner','Tools','Parking','Consumables','Other']);
  function mileagePence(miles,rate){
   if(!/^\d{1,7}(?:\.\d{1,2})?$/.test(String(miles))||Number(miles)<=0)return null;
   if(!/^\d{1,3}(?:\.\d{1,4})?$/.test(String(rate))||Number(rate)<=0)return null;

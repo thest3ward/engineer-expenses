@@ -70,7 +70,8 @@ function card(r,i){
  const checked=r.checked&&C.validItem(r), collapsed=checked&&!expandedReceipts.has(r.id);
  const detailsId='receipt-details-'+r.id;
  const summary=r.category||r.description.trim()||'Receipt '+number;
- const options=C.claimTypes.map(type=>`<option${r.category===type?' selected':''}>${type}</option>`).join('');
+ const choices=C.claimTypes.filter(type=>type!=='Food'||r.category==='Food');
+ const options=choices.map(type=>`<option${r.category===type?' selected':''}>${type}</option>`).join('');
  return `<article class="receipt ${checked?'checked':''}" data-id="${r.id}">
  <div class="receipt-top" ${collapsed?'hidden':''}><h3>Receipt ${number}</h3><span class="badge">${r.reading?'Reading…':checked?'Checked':'Needs checking'}</span></div>
  <button type="button" class="receipt-toggle" data-action="toggle" aria-controls="${detailsId}" aria-expanded="${!collapsed}" ${checked?'':'hidden'}>
