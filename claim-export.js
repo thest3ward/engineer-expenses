@@ -16,15 +16,6 @@
   lines.push(['Owed to employee'+(t.pending&&form.paymentType!=='card'?' before mileage payment':''),money(t.owed)]);
   return lines;
  }
- function paragraph(text,{bold=false,size=22,style='',after=100}={}){
-  const properties=`<w:pPr>${style?'<w:pStyle w:val="'+style+'"/>':''}<w:spacing w:after="${after}"/></w:pPr>`;
-  return `<w:p>${properties}<w:r><w:rPr>${bold?'<w:b/>':''}<w:sz w:val="${size}"/><w:color w:val="000000"/></w:rPr>${String(text).split(/\r?\n/).map((line,i)=>(i?'<w:br/>':'')+'<w:t xml:space="preserve">'+escape(line)+'</w:t>').join('')}</w:r></w:p>`;
- }
- function table(rows){
-  const widths=[500,1400,1400,5000,1700];
-  const borders=['top','left','bottom','right','insideH','insideV'].map(edge=>`<w:${edge} w:val="single" w:sz="4" w:color="D9D9D9"/>`).join('');
-  return `<w:tbl><w:tblPr><w:tblW w:w="10000" w:type="dxa"/><w:tblLayout w:type="fixed"/><w:tblBorders>${borders}</w:tblBorders><w:tblCellMar><w:top w:w="90" w:type="dxa"/><w:left w:w="100" w:type="dxa"/><w:bottom w:w="90" w:type="dxa"/><w:right w:w="100" w:type="dxa"/></w:tblCellMar></w:tblPr><w:tblGrid>${widths.map(width=>`<w:gridCol w:w="${width}"/>`).join('')}</w:tblGrid>${rows.map((row,index)=>`<w:tr>${'<w:trPr><w:cantSplit/>'+(index===0?'<w:tblHeader/>':'')+'</w:trPr>'}${row.map((value,column)=>`<w:tc><w:tcPr><w:tcW w:w="${widths[column]}" w:type="dxa"/><w:vAlign w:val="center"/>${index===0?'<w:shd w:fill="E8EEEA"/>':''}</w:tcPr>${paragraph(value,{bold:index===0,size:20,after:50})}</w:tc>`).join('')}</w:tr>`).join('')}</w:tbl>`;
- }
  function signature(strokes){
   if(!strokes?.length)return null;
   // A small PNG is generated without a canvas so exports can be tested outside a browser too.
@@ -45,25 +36,32 @@
   function chunk(type,data){const bytes=join([new TextEncoder().encode(type),data]);let crc=0xffffffff;for(const byte of bytes){crc^=byte;for(let i=0;i<8;i++)crc=(crc>>>1)^((crc&1)?0xedb88320:0);}return join([integer(data.length),bytes,integer((crc^0xffffffff)>>>0)]);}
   return join([new Uint8Array([137,80,78,71,13,10,26,10]),chunk('IHDR',join([integer(width),integer(height),new Uint8Array([8,6,0,0,0])])),chunk('IDAT',join(parts)),chunk('IEND',new Uint8Array())]);
  }
- async function word(form){
+ async function word(form,templateBytes){
   if(!C.canCreate(form))throw Error('Complete and check every expense before downloading the Word claim.');
-  const zip=new root.JSZip(),sig=signature(C.cleanSignature(form.signature));
-  const rows=[['#','Date','Expense Type','Notes and journey details','Amount'],...form.receipts.map((item,index)=>[String(index+1),date(item.date),itemType(item),notes(item),amount(item)])];
-  let content=paragraph(type(form),{style:'Title',size:34,after:200})+paragraph('Claim reference '+form.reference,{size:20})+paragraph('Engineer '+form.engineer)+paragraph('Claim date '+date(form.claimDate),{after:200})+table(rows)+paragraph('',{after:80});
-  for(const [label,value] of summary(form))content+=paragraph(label+'    '+value,{bold:true});
-  content+=paragraph('Employee signature',{after:80});
-  if(sig)content+='<w:p><w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="2743200" cy="548640"/><wp:docPr id="1" name="Employee signature" descr="Employee drawn signature"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr id="1" name="Employee signature"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="signature"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="2743200" cy="548640"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>';
-  else content+=paragraph('________________________________________');
-  content+=paragraph('Approved by accounts    ______________________________')+paragraph('Approved by manager    ______________________________')+paragraph('Total approved by accounts    £ ________________________')+paragraph('Total to be reimbursed    £ ____________________________');
-  const photographs=form.receipts.filter(r=>r.kind!=='mileage').length;
-  content+=paragraph(photographs?'Supporting photographs are in '+form.reference+'-receipts.pdf. Expense item numbers match this form.':'This form contains personal vehicle mileage only.',{size:18});
-  const namespaces='xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"';
-  zip.file('word/document.xml',`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document ${namespaces}><w:body>${content}<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="963" w:right="953" w:bottom="963" w:left="953"/></w:sectPr></w:body></w:document>`);
-  zip.file('word/styles.xml','<?xml version="1.0" encoding="UTF-8"?><w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial"/><w:sz w:val="22"/><w:color w:val="000000"/></w:rPr></w:rPrDefault></w:docDefaults><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style><w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/><w:basedOn w:val="Normal"/><w:pPr><w:keepNext/></w:pPr><w:rPr><w:b/><w:sz w:val="34"/><w:color w:val="000000"/></w:rPr></w:style></w:styles>');
-  zip.file('[Content_Types].xml','<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/></Types>');
-  zip.file('_rels/.rels','<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="document" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>');
-  zip.file('word/_rels/document.xml.rels',`<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="styles" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>${sig?'<Relationship Id="signature" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/signature.png"/>':''}</Relationships>`);
-  if(sig)zip.file('word/media/signature.png',sig);
+  if(!templateBytes){const response=await fetch('claim-template.docx?v=original-form-1');if(!response.ok)throw Error('Could not load the claim form. Please check your connection and try again.');templateBytes=await response.arrayBuffer();}
+  const zip=await root.JSZip.loadAsync(templateBytes),sig=signature(C.cleanSignature(form.signature)),t=C.totals(form);
+  let xml=await zip.file('word/document.xml').async('string');
+  const fill=(text,values)=>text.replace(/\{\{([A-Z_]+)\}\}/g,(marker,key)=>Object.hasOwn(values,key)?escape(values[key]).replace(/\r?\n/g,'</w:t><w:br/><w:t xml:space="preserve">'):marker);
+  const row=xml.match(/<w:tr\b[^>]*>[\s\S]*?<\/w:tr>/g).find(value=>value.includes('{{ITEM_DATE}}'));
+  // Keep the original writing grid, allowing long entries to grow naturally.
+  const rows=form.receipts.map((item,index)=>fill(row,{ITEM_DATE:date(item.date),ITEM_TYPE:itemType(item),ITEM_NOTES:(index+1)+'. '+notes(item),ITEM_AMOUNT:C.itemPence(item)===null?'Pending':amount(item)}));
+  const extraLines=form.receipts.reduce((sum,item)=>sum+Math.max(0,Math.ceil(itemType(item).length/18)-1,Math.ceil(notes(item).length/48)-1),0);
+  while(rows.length<Math.max(form.receipts.length,17-extraLines))rows.push(fill(row,{ITEM_DATE:'',ITEM_TYPE:'',ITEM_NOTES:'',ITEM_AMOUNT:''}));
+  xml=xml.replace(row,rows.map((value,index)=>value.replace(/w:fill="D3DFEE"/g,'w:fill="'+(index%2===0?'D3DFEE':'FFFFFF')+'"')).join(''));
+  const photographs=form.receipts.filter(item=>item.kind!=='mileage').length;
+  xml=fill(xml,{ENGINEER:form.engineer,DATE:date(form.claimDate),REFERENCE:form.reference,FORM_TYPE:type(form),TOTAL_LABEL:form.paymentType==='card'?'TOTAL COMPANY CARD EXPENDITURE':'TOTAL CLAIMED BY EMPLOYEE',TOTAL:money(t.total)+(t.pending?' *':''),OWED:money(t.owed)+(t.pending&&form.paymentType!=='card'?' *':''),MILES:t.miles.toFixed(2),MILEAGE_PAYMENT:t.pending?'Accounts to calculate':money(t.mileageAmount),RECEIPTS:money(t.receipts),ATTACHMENTS:(photographs?'Receipts: '+form.reference+'-receipts.pdf. Item numbers match the notes.':'Personal vehicle mileage only.')+(t.pending?' * Mileage payment to be added by accounts.':'')});
+  let drawing='';
+  if(sig){
+   drawing='<w:r><w:drawing xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="1143000" cy="228600"/><wp:docPr id="201" name="Employee signature" descr="Employee drawn signature"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr id="201" name="Employee signature"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="expenseSignature"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1143000" cy="228600"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>';
+   let rels=await zip.file('word/_rels/document.xml.rels').async('string');
+   zip.file('word/_rels/document.xml.rels',rels.replace('</Relationships>','<Relationship Id="expenseSignature" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/expense-signature.png"/></Relationships>'));
+   let types=await zip.file('[Content_Types].xml').async('string');
+   if(!/Extension="png"/.test(types))zip.file('[Content_Types].xml',types.replace('</Types>','<Default Extension="png" ContentType="image/png"/></Types>'));
+   zip.file('word/media/expense-signature.png',sig);
+  }
+  xml=xml.replace(/<w:r><w:t>\{\{SIGNATURE\}\}<\/w:t><\/w:r>/,drawing);
+  if(/\{\{[A-Z_]+\}\}/.test(xml))throw Error('The claim form could not be completed.');
+  zip.file('word/document.xml',xml);
   return new Blob([await zip.generateAsync({type:'uint8array',compression:'DEFLATE'})],{type:mime});
  }
  function receiptPDF(form,{preview=false}={}){
