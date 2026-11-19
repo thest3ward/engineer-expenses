@@ -7,7 +7,7 @@
  const type=form=>form.paymentType==='card'?'Company credit card expenditure':'Personal expense reimbursement';
  const itemType=item=>item.kind==='mileage'?'Mileage':item.category||'Not entered';
  function amount(item){const n=C.itemPence(item);return n===null?(item.kind==='mileage'?'Accounts to calculate':'Not entered'):money(n);}
- function notes(item){return String(item.description||'').trim()+(item.kind==='mileage'?`\nOwn personal vehicle · ${item.miles} miles${item.rate?' at £'+item.rate+' per mile':''}`:'');}
+ function notes(item){return String(item.description||'').trim()+(item.kind==='mileage'?`\nOwn personal vehicle · ${C.mileageFuels[item.fuel]||'Fuel not selected'} · ${C.mileageBands[item.engineBand]||'Engine size not selected'}\n${item.miles} miles${item.rate?' at £'+item.rate+' per mile':''}`:'');}
  function summary(form){
   const t=C.totals(form);
   const lines=[['Receipts excluding VAT',t.net===null?'VAT selection needed':money(t.net)],['Receipt VAT',t.vat===null?'VAT selection needed':money(t.vat)],['Receipts including VAT',money(t.receipts)]];

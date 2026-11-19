@@ -37,6 +37,8 @@
     if(r.vatAmount!=null&&(typeof r.vatAmount!=='string'||r.vatAmount.length>10))throw Error('Invalid VAT amount in backup.');
     if(!r||typeof r.date!=='string'||typeof r.description!=='string'||r.description.length>160||typeof r.amount!=='string'||r.amount.length>10||r.date.length>10)throw Error('Invalid expense in backup.');
     if(r.kind==='mileage'){
+     if(r.fuel!=null&&!Object.hasOwn(C.mileageFuels,r.fuel))throw Error('Invalid mileage fuel type in backup.');
+     if(r.engineBand!=null&&!Object.hasOwn(C.mileageBands,r.engineBand))throw Error('Invalid mileage engine size in backup.');
      if(typeof r.miles!=='string'||typeof r.rate!=='string'||r.personalVehicle!==true||f.paymentType==='card')throw Error('Invalid personal vehicle mileage in backup.');
      if(!/^\d{1,7}(?:\.\d{1,2})?$/.test(r.miles)||Number(r.miles)<=0||r.rate!==''&&C.mileagePence(r.miles,r.rate)===null)throw Error('Invalid mileage distance or rate.');
     }else if(typeof r.image!=='string'||r.image.length>30*1024*1024||!/^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(r.image))throw Error('Invalid receipt photo in backup.');

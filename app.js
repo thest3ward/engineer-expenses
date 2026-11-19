@@ -36,7 +36,7 @@ function summary(){
  $('#download-receipts').disabled=!C.canCreate(state)||busy||!state.receipts.some(r=>r.kind!=='mileage');
  $('#preview-claim').disabled=!count||pdfSaving;
  for(const id of ['camera','upload','another-camera','another-upload','add-mileage'])$('#'+id).disabled=busy;
- for(const id of ['new-claim','restore','form-select','add-form','mileage-rate'])$('#'+id).disabled=busy;
+ for(const id of ['new-claim','restore','form-select','add-form'])$('#'+id).disabled=busy;
  $('#add-another').hidden=!count;
  $('#mileage-tools').hidden=state.paymentType==='card';
  renderFormControls();
@@ -48,10 +48,11 @@ function renderFormControls(){
  $('#form-purpose').textContent=state.paymentType==='card'?'Company credit card expenditure':'Personal expense reimbursement';
 }
 function showForm(){
- $('#engineer').value=state.engineer;$('#claim-date').value=state.claimDate;$('#mileage-rate').value=state.mileageRate;
+ $('#engineer').value=state.engineer;$('#claim-date').value=state.claimDate;
  expandedReceipts.clear();render();renderSignature();
 }
 function fieldsValidation(r,element){
+ if(r.kind==='mileage')for(const key of ['fuel','engineBand']){const field=element.querySelector(`[data-field="${key}"]`),choices=key==='fuel'?C.mileageFuels:C.mileageBands;if(field){const invalid=!Object.hasOwn(choices,r[key]);field.classList.toggle('missing-field',invalid);field.setAttribute('aria-invalid',String(invalid));}}
  const vat=element.querySelector('.vat-options');if(vat){const missing=!['none','standard','custom'].includes(r.vatMode);vat.classList.toggle('missing-field',missing);vat.setAttribute('aria-invalid',String(missing));}
  const custom=element.querySelector('[data-field="vatAmount"]');if(custom){const invalid=r.vatMode==='custom'&&C.vatBreakdown(r)===null;custom.classList.toggle('missing-field',invalid);custom.setAttribute('aria-invalid',String(invalid));}
  for(const key of ['category','description']){
@@ -208,7 +209,7 @@ $('#add-form').onclick=newFormDialog;$('#new-claim').onclick=newFormDialog;
 $('#close-form').onclick=()=>$('#form-dialog').close();
 $('#new-form-fields').onsubmit=e=>{
  e.preventDefault();if(importingPhotos||readingId||pdfSaving)return;
- const form=ClaimForms.create({engineer:state.engineer,date:today(),paymentType:$('#new-form-type').value,mileageRate:state.mileageRate});
+ const form=ClaimForms.create({engineer:state.engineer,date:today(),paymentType:$('#new-form-type').value});
  workspace.forms.push(form);workspace.activeFormId=form.id;state=form;$('#form-dialog').close();showForm();save();
 };
 $('#form-select').onchange=e=>{
@@ -216,14 +217,10 @@ $('#form-select').onchange=e=>{
  const form=workspace.forms.find(f=>f.id===e.target.value);if(!form)return;
  state=form;workspace.activeFormId=form.id;showForm();save();
 };
-$('#mileage-rate').onchange=e=>{
- const rate=e.target.value.trim();
- if(rate!==''&&C.mileagePence('1',rate)===null){e.target.setAttribute('aria-invalid','true');notify('Enter a positive company-approved rate, or leave it blank for accounts.',true);e.target.value=state.mileageRate;return;}
- e.target.removeAttribute('aria-invalid');state.mileageRate=rate;
- state.receipts.filter(r=>r.kind==='mileage').forEach(r=>{C.editItem(r,'rate',rate);});
- render();save();
-};
-function mileageValue(r){const value=C.itemPence(r);return value===null?'Payment to be calculated by accounts':money(value)+' at £'+r.rate+' per mile';}
+function mileageValue(r){if(!Object.hasOwn(C.mileageFuels,r.fuel)||!Object.hasOwn(C.mileageBands,r.engineBand))return 'Select fuel type and engine size, then check this journey again.';if(!C.validDate(r.date))return 'Enter a valid journey date.';if(r.date<C.mileageEffectiveDate)return 'Before 1 April 2026: payment to be calculated by accounts.';const rate=C.companyMileageRate(r),value=C.mileagePence(r.miles,rate);return (value===null?'Enter the distance':money(value))+' at '+Math.round(Number(rate)*100)+'p per mile';}
+function vehicleOptions(choices,value){return '<option value="">Select an option</option>'+Object.entries(choices).map(([key,label])=>`<option value="${key}"${key===value?' selected':''}>${label}</option>`).join('');}
+function updateMileagePayment(){ $('#mileage-payment').textContent=mileageValue({date:$('#mileage-date').value,miles:$('#mileage-miles').value,fuel:$('#mileage-fuel').value,engineBand:$('#mileage-engine-band').value}); }
+for(const id of ['mileage-date','mileage-miles','mileage-fuel','mileage-engine-band'])$('#'+id).addEventListener('input',updateMileagePayment);
 function mileageCard(r,i){
  const checked=r.checked&&C.validItem(r),collapsed=checked&&!expandedReceipts.has(r.id),details='receipt-details-'+r.id;
  return `<article class="receipt ${checked?'checked':''}" data-id="${r.id}">
@@ -231,7 +228,7 @@ function mileageCard(r,i){
  <button type="button" class="receipt-toggle" data-action="toggle" aria-controls="${details}" aria-expanded="${!collapsed}" ${checked?'':'hidden'}><span class="receipt-toggle-label">✓ Mileage</span><span>${dateText(r.date)}</span><strong>${escapeHtml(r.miles)} mi</strong><span>${collapsed?'▾':'▴'}</span></button>
  <div id="${details}" class="receipt-details" ${collapsed?'hidden':''}><div class="expense-fields">
  <label>Date<input type="date" data-field="date" value="${escapeHtml(r.date)}"></label>
- <label>Distance (miles)<input type="text" inputmode="decimal" data-field="miles" value="${escapeHtml(r.miles)}" maxlength="10"></label>
+ <label>Fuel type (required)<select data-field="fuel" required>${vehicleOptions(C.mileageFuels,r.fuel)}</select></label><label>Engine size (required)<select data-field="engineBand" required>${vehicleOptions(C.mileageBands,r.engineBand)}</select></label><label>Distance (miles)<input type="text" inputmode="decimal" data-field="miles" value="${escapeHtml(r.miles)}" maxlength="10"></label>
  <label class="description">Journey details / Notes (required)<input data-field="description" required maxlength="160" value="${escapeHtml(r.description)}"></label>
  </div><p class="mileage-value">${escapeHtml(mileageValue(r))}</p><p class="pack-note">Own personal vehicle used for this work journey.</p>
  <label class="check"><input type="checkbox" data-action="check" ${checked?'checked':''} ${C.validItem(r)?'':'disabled'}>I’ve checked the date, journey details and miles.</label>
@@ -239,14 +236,15 @@ function mileageCard(r,i){
 }
 $('#add-mileage').onclick=()=>{
  if(state.paymentType==='card'||importingPhotos||readingId||pdfSaving)return;
- $('#mileage-date').value=today();$('#mileage-notes').value='';$('#mileage-miles').value='';$('#personal-vehicle').checked=false;$('#mileage-error').textContent='';$('#mileage-dialog').showModal();
+ $('#mileage-fuel').value=state.vehicleFuel||'';$('#mileage-engine-band').value=state.vehicleEngineBand||'';$('#mileage-date').value=today();$('#mileage-notes').value='';$('#mileage-miles').value='';$('#personal-vehicle').checked=false;$('#mileage-error').textContent='';updateMileagePayment();$('#mileage-dialog').showModal();
 };
 $('#close-mileage').onclick=()=>$('#mileage-dialog').close();
 $('#mileage-fields').onsubmit=e=>{
  e.preventDefault();if(state.paymentType==='card')return;
- const r={id:crypto.randomUUID(),kind:'mileage',category:'Mileage',date:$('#mileage-date').value,description:$('#mileage-notes').value.trim(),miles:$('#mileage-miles').value.trim(),rate:state.mileageRate,personalVehicle:$('#personal-vehicle').checked,amount:'',checked:false,reading:false};
- if(!C.validItem(r)){$('#mileage-error').textContent='Complete the date, journey details, miles and personal vehicle confirmation.';return;}
- state.receipts.push(r);$('#mileage-dialog').close();render();save();$('[data-id="'+r.id+'"]').scrollIntoView({block:'nearest'});
+ const r={id:crypto.randomUUID(),kind:'mileage',category:'Mileage',date:$('#mileage-date').value,description:$('#mileage-notes').value.trim(),miles:$('#mileage-miles').value.trim(),fuel:$('#mileage-fuel').value,engineBand:$('#mileage-engine-band').value,rate:'',personalVehicle:$('#personal-vehicle').checked,amount:'',checked:false,reading:false};
+ r.rate=C.companyMileageRate(r);
+ if(!C.validItem(r)){$('#mileage-error').textContent='Complete the date, fuel type, engine size, journey details, miles and personal vehicle confirmation.';return;}
+ state.vehicleFuel=r.fuel;state.vehicleEngineBand=r.engineBand;state.receipts.push(r);$('#mileage-dialog').close();render();save();$('[data-id="'+r.id+'"]').scrollIntoView({block:'nearest'});
 };
 function dateText(s){return C.validDate(s)?s.split('-').reverse().join('/'):'Not entered';}
 function ascii(s){return String(s).replace(/[\u2018\u2019]/g,"'").replace(/[\u2013\u2014]/g,'-').replace(/[^\x20-\x7e\u00a0-\u00ff]/g,'?');}
