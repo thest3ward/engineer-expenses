@@ -115,6 +115,12 @@ $('#lock-signature').onclick=()=>{if(signaturePointer!==null)return;signatureEdi
 $('#clear-signature').onclick=()=>{if(!signatureEditing||signaturePointer!==null)return;state.signature=[];renderSignature();save();};
 for(const id of ['camera','another-camera'])$('#'+id).onclick=()=>$('#camera-file').click();
 for(const id of ['upload','another-upload'])$('#'+id).onclick=()=>$('#receipt-file').click();
+function confirmDuplicatePhoto(image,existing,items){
+ const dialog=$('#duplicate-dialog');$('#duplicate-existing-photo').src=existing.image;$('#duplicate-new-photo').src=image;
+ $('#duplicate-receipt-label').textContent='Already added as receipt '+(items.indexOf(existing)+1)+'.';
+ dialog.returnValue='skip';
+ return new Promise(resolve=>{dialog.addEventListener('close',()=>resolve(dialog.returnValue==='keep'),{once:true});dialog.showModal();});
+}
 async function normaliseImage(file){
  if(file.size>20*1024*1024)throw Error('This photo is over 20 MB. Choose a smaller photo.');
  if(!['image/jpeg','image/png','image/webp'].includes(file.type))throw Error('Choose a JPG, PNG or WebP photo. Convert HEIC photos to JPG first.');
@@ -127,10 +133,13 @@ for(const selector of ['#receipt-file','#camera-file'])$(selector).onchange=asyn
  summary();
  const added=[];
  const failures=[];
+ let skipped=0;
  try{
   for(const file of files){
    try{
     const image=await normaliseImage(file);
+    const candidates=[...state.receipts,...added],duplicate=await ReceiptDuplicates.find(image,candidates);
+    if(duplicate&&!await confirmDuplicatePhoto(image,duplicate,candidates)){skipped++;continue;}
     added.push({id:crypto.randomUUID(),image,date:'',amount:'',description:'',category:'',checked:false,reading:false,note:''});
    }catch(err){
     failures.push(err.message||'Could not open that photo. Try a JPG image.');
@@ -150,6 +159,7 @@ for(const selector of ['#receipt-file','#camera-file'])$(selector).onchange=asyn
   importingPhotos=false;
   render();
   if(failures.length)notify(failures.length===1?failures[0]:`${failures.length} photos could not be added. ${failures[0]}`,true);
+  else if(skipped)notify(`Skipped ${skipped} duplicate photo${skipped===1?'':'s'}. The existing receipt${skipped===1?' was':'s were'} kept.`);
  }
 };
 async function readReceipt(r,label=''){
