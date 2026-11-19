@@ -5,6 +5,7 @@ let workspace=ClaimForms.load(null,{date:today()});
 let state=workspace.forms[0],legacySnapshot=null,db,worker,readingId=null,readToken=0,saving=Promise.resolve(),saveFailed=false,noticeTimer,pdfSaving=false,pendingPDF=null;
 const expandedReceipts=new Set();
 let importingPhotos=false;
+let duplicateScanId=0,duplicateScanning=false,duplicatePairs=[];
 let cancelCurrentRead=null;
 const escapeHtml=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function notify(message,error=false){$('#notice').textContent=message;$('#notice').className=error?'error':'';$('#notice').hidden=false;clearTimeout(noticeTimer);noticeTimer=setTimeout(()=>$('#notice').hidden=true,error?12000:5500);}
@@ -39,6 +40,7 @@ function summary(){
  for(const id of ['new-claim','restore','form-select','add-form'])$('#'+id).disabled=busy;
  $('#add-another').hidden=!count;
  $('#mileage-tools').hidden=state.paymentType==='card';
+ $('#scan-duplicates').disabled=busy||duplicateScanning||!state.receipts.some(r=>r.kind!=='mileage');
  renderFormControls();
 }
 function renderFormControls(){
@@ -50,7 +52,7 @@ function renderFormControls(){
 function showForm(){
  signatureEditing=false;signaturePointer=null;
  $('#engineer').value=state.engineer;$('#claim-date').value=state.claimDate;
- expandedReceipts.clear();render();renderSignature();
+ expandedReceipts.clear();render();renderSignature();checkSavedDuplicates();
 }
 function fieldsValidation(r,element){
  if(r.kind==='mileage')for(const key of ['fuel','engineBand']){const field=element.querySelector(`[data-field="${key}"]`),choices=key==='fuel'?C.mileageFuels:C.mileageBands;if(field){const invalid=!Object.hasOwn(choices,r[key]);field.classList.toggle('missing-field',invalid);field.setAttribute('aria-invalid',String(invalid));}}
@@ -115,12 +117,29 @@ $('#lock-signature').onclick=()=>{if(signaturePointer!==null)return;signatureEdi
 $('#clear-signature').onclick=()=>{if(!signatureEditing||signaturePointer!==null)return;state.signature=[];renderSignature();save();};
 for(const id of ['camera','another-camera'])$('#'+id).onclick=()=>$('#camera-file').click();
 for(const id of ['upload','another-upload'])$('#'+id).onclick=()=>$('#receipt-file').click();
-function confirmDuplicatePhoto(image,existing,items){
+function confirmDuplicatePhoto(image,existing,items,review=false){
  const dialog=$('#duplicate-dialog');$('#duplicate-existing-photo').src=existing.image;$('#duplicate-new-photo').src=image;
+ $('#duplicate-explanation').textContent=review?'These photos may be the same receipt. Close this comparison and remove a receipt from the form if needed.':'This photo looks like a receipt already in this form. Keep it anyway?';
+ $('#duplicate-skip').textContent=review?'Close comparison':'Skip duplicate';$('#duplicate-keep').hidden=review;
  $('#duplicate-receipt-label').textContent='Already added as receipt '+(items.indexOf(existing)+1)+'.';
  dialog.returnValue='skip';
  return new Promise(resolve=>{dialog.addEventListener('close',()=>resolve(dialog.returnValue==='keep'),{once:true});dialog.showModal();});
 }
+async function checkSavedDuplicates(){
+ const request=++duplicateScanId,form=state,photos=form.receipts.filter(r=>r.kind!=='mileage').map(r=>({id:r.id,image:r.image,sourceHash:r.sourceHash}));
+ duplicatePairs=[];$('#duplicate-results').innerHTML='';duplicateScanning=true;summary();$('#duplicate-scan-status').textContent=photos.length>1?'Checking saved receipt photos...':'Add at least two receipt photos to check for duplicates.';
+ try{
+  const pairs=photos.length>1?await ReceiptDuplicates.scan(photos):[];
+  if(request!==duplicateScanId||state!==form)return;
+  if(photos.length!==form.receipts.filter(r=>r.kind!=='mileage').length||photos.some(p=>!form.receipts.some(r=>r.id===p.id&&r.image===p.image))){$('#duplicate-scan-status').textContent='Photos changed. Tap Check duplicate photos again.';return;}
+  duplicatePairs=pairs;
+  $('#duplicate-scan-status').textContent=pairs.length?`${pairs.length} possible duplicate photo${pairs.length===1?'':'s'} found. Compare below; nothing has been removed.`:photos.length>1?'No duplicate photos found.':'';
+  $('#duplicate-results').innerHTML=pairs.map((pair,index)=>`<li><button type="button" data-duplicate-pair="${index}">Compare receipts ${form.receipts.findIndex(r=>r.id===pair.first.id)+1} and ${form.receipts.findIndex(r=>r.id===pair.second.id)+1}</button></li>`).join('');
+ }catch{if(request===duplicateScanId)$('#duplicate-scan-status').textContent='Could not finish checking photos. Try again.';}
+ finally{if(request===duplicateScanId){duplicateScanning=false;summary();}}
+}
+$('#scan-duplicates').onclick=()=>checkSavedDuplicates();
+$('#duplicate-results').onclick=e=>{const button=e.target.closest('[data-duplicate-pair]'),pair=button&&duplicatePairs[Number(button.dataset.duplicatePair)];if(!pair)return;const first=state.receipts.find(r=>r.id===pair.first.id),second=state.receipts.find(r=>r.id===pair.second.id);if(first&&second)confirmDuplicatePhoto(second.image,first,state.receipts,true);};
 async function normaliseImage(file){
  if(file.size>20*1024*1024)throw Error('This photo is over 20 MB. Choose a smaller photo.');
  if(!['image/jpeg','image/png','image/webp'].includes(file.type))throw Error('Choose a JPG, PNG or WebP photo. Convert HEIC photos to JPG first.');
@@ -138,9 +157,10 @@ for(const selector of ['#receipt-file','#camera-file'])$(selector).onchange=asyn
   for(const file of files){
    try{
     const image=await normaliseImage(file);
-    const candidates=[...state.receipts,...added],duplicate=await ReceiptDuplicates.find(image,candidates);
+    const sourceHash=await ReceiptDuplicates.fileHash(file);
+    const candidates=[...state.receipts,...added],duplicate=await ReceiptDuplicates.find(image,candidates,{sourceHash});
     if(duplicate&&!await confirmDuplicatePhoto(image,duplicate,candidates)){skipped++;continue;}
-    added.push({id:crypto.randomUUID(),image,date:'',amount:'',description:'',category:'',checked:false,reading:false,note:''});
+    added.push({id:crypto.randomUUID(),image,sourceHash,date:'',amount:'',description:'',category:'',checked:false,reading:false,note:''});
    }catch(err){
     failures.push(err.message||'Could not open that photo. Try a JPG image.');
    }
@@ -160,6 +180,7 @@ for(const selector of ['#receipt-file','#camera-file'])$(selector).onchange=asyn
   render();
   if(failures.length)notify(failures.length===1?failures[0]:`${failures.length} photos could not be added. ${failures[0]}`,true);
   else if(skipped)notify(`Skipped ${skipped} duplicate photo${skipped===1?'':'s'}. The existing receipt${skipped===1?' was':'s were'} kept.`);
+  checkSavedDuplicates();
  }
 };
 async function readReceipt(r,label=''){
@@ -191,9 +212,9 @@ $('#receipts').onclick=async e=>{const button=e.target.closest('button[data-acti
   render();$(`[data-id=${JSON.stringify(r.id)}] .receipt-toggle`).focus({preventScroll:true});
  }
  if(action==='view'){const index=state.receipts.indexOf(r)+1;$('#photo-title').textContent=`Receipt ${index} · ${r.amount?money(C.pence(r.amount)||0):'Check amount'}`;$('#large-photo').src=r.image;$('#photo-dialog').showModal();}
- if(action==='remove'&&confirm('Remove this receipt from the draft?')){expandedReceipts.delete(r.id);state.receipts=state.receipts.filter(x=>x!==r);render();save();}
+ if(action==='remove'&&confirm('Remove this receipt from the draft?')){expandedReceipts.delete(r.id);state.receipts=state.receipts.filter(x=>x!==r);render();save();checkSavedDuplicates();}
  if(action==='read'&&!importingPhotos)await readReceipt(r);
- if(action==='rotate'){try{const image=new Image();image.src=r.image;await image.decode();const canvas=document.createElement('canvas');canvas.width=image.height;canvas.height=image.width;const ctx=canvas.getContext('2d');ctx.translate(canvas.width/2,canvas.height/2);ctx.rotate(Math.PI/2);ctx.drawImage(image,-image.width/2,-image.height/2);C.editItem(r,'image',canvas.toDataURL('image/jpeg',.92));r.note='Photo rotated. Check the details again.';render();save();}catch{notify('Could not rotate this photo.',true);}}
+ if(action==='rotate'){try{const image=new Image();image.src=r.image;await image.decode();const canvas=document.createElement('canvas');canvas.width=image.height;canvas.height=image.width;const ctx=canvas.getContext('2d');ctx.translate(canvas.width/2,canvas.height/2);ctx.rotate(Math.PI/2);ctx.drawImage(image,-image.width/2,-image.height/2);C.editItem(r,'image',canvas.toDataURL('image/jpeg',.92));r.note='Photo rotated. Check the details again.';render();save();checkSavedDuplicates();}catch{notify('Could not rotate this photo.',true);}}
 };
 $('#close-photo').onclick=()=>$('#photo-dialog').close();
 function download(blob,name){const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);}

@@ -8,7 +8,7 @@
   for(let i=0;i<a.pixels.length;i++){const difference=Math.abs(a.pixels[i]-b.pixels[i]);error+=difference;peak=Math.max(peak,difference);contrast+=Math.abs(a.pixels[i]-am)+Math.abs(b.pixels[i]-bm);}
   error/=a.pixels.length;contrast/=2*a.pixels.length;
   // Keep this conservative: flat or merely similar receipt layouts are not enough.
-  return contrast>=4&&peak<=12&&error<=2&&error/contrast<=.06;
+  return contrast>=.5&&peak<=12&&error<=2&&error/contrast<=.06;
  }
  async function fingerprint(source){
   const img=new Image();img.src=source;await img.decode();
@@ -19,9 +19,14 @@
   return {ratio:img.naturalWidth/img.naturalHeight,pixels};
  }
  const cache=new WeakMap();
- async function find(image,items){
+ async function fileHash(file){
+  if(typeof file?.arrayBuffer!=='function'||!root.crypto?.subtle)return '';
+  const digest=await root.crypto.subtle.digest('SHA-256',await file.arrayBuffer());
+  return Array.from(new Uint8Array(digest),byte=>byte.toString(16).padStart(2,'0')).join('');
+ }
+ async function find(image,items,{sourceHash=''}={}){
   const photos=items.filter(item=>item.kind!=='mileage'&&item.image);
-  const exact=photos.find(item=>item.image===image);if(exact)return exact;
+  const exact=photos.find(item=>item.image===image||sourceHash&&item.sourceHash===sourceHash);if(exact)return exact;
   if(!photos.length)return null;
   let incoming;try{incoming=await fingerprint(image);}catch{return null;}
   for(const item of photos){
@@ -31,5 +36,6 @@
   }
   return null;
  }
- const api={similar,find};root.ReceiptDuplicates=api;if(typeof module!=='undefined')module.exports=api;
+ async function scan(items){const seen=[],pairs=[];for(const item of items){if(item.kind==='mileage'||!item.image)continue;const first=await find(item.image,seen,{sourceHash:item.sourceHash});if(first)pairs.push({first,second:item});seen.push(item);}return pairs;}
+ const api={similar,find,fileHash,scan};root.ReceiptDuplicates=api;if(typeof module!=='undefined')module.exports=api;
 })(typeof globalThis!=='undefined'?globalThis:this);
