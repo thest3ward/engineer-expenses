@@ -10,10 +10,19 @@
   return Number((units(miles,2)*units(rate,4)+5000n)/10000n);
  }
  function itemPence(r){return r.kind==='mileage'?mileagePence(r.miles,r.rate):pence(r.amount);}
+ function vatBreakdown(r){
+  const gross=pence(r.amount);if(gross===null||r.kind==='mileage')return null;
+  let vat;
+  if(r.vatMode==='none')vat=0;
+  else if(r.vatMode==='standard')vat=Math.round(gross/6);
+  else if(r.vatMode==='custom'){vat=/^0(?:\.0{1,2})?$/.test(String(r.vatAmount))?0:pence(r.vatAmount);if(vat===null||vat>gross)return null;}
+  else return null;
+  return {gross,vat,net:gross-vat};
+ }
  function validItem(r){
   if(!validDate(r.date)||!String(r.description||'').trim()||r.reading)return false;
   if(r.kind==='mileage')return r.category==='Mileage'&&r.personalVehicle===true&&/^\d{1,7}(?:\.\d{1,2})?$/.test(String(r.miles))&&Number(r.miles)>0&&(r.rate===''||mileagePence(r.miles,r.rate)!==null);
-  return !!r.image&&claimTypes.includes(r.category)&&pence(r.amount)!==null;
+  return !!r.image&&claimTypes.includes(r.category)&&vatBreakdown(r)!==null;
  }
  function canCreate(s){return !!s.engineer.trim()&&validDate(s.claimDate)&&s.receipts.length>0&&s.receipts.every(r=>r.checked&&validItem(r)&&(s.paymentType!=='card'||r.kind!=='mileage'));}
  function totals(form){
@@ -23,7 +32,9 @@
   const miles=mileage.reduce((n,r)=>n+(Number(r.miles)||0),0);
   const pending=mileage.some(r=>r.rate==='');
   const total=receipts+mileageAmount;
-  return {receipts,mileageAmount,miles,pending,total,owed:form.paymentType==='card'?0:total};
+  const breakdowns=form.receipts.filter(r=>r.kind!=='mileage').map(vatBreakdown),vatIncomplete=breakdowns.some(r=>r===null);
+  const vat=vatIncomplete?null:breakdowns.reduce((sum,r)=>sum+r.vat,0),net=vatIncomplete?null:receipts-vat;
+  return {receipts,net,vat,vatIncomplete,mileageAmount,miles,pending,total,owed:form.paymentType==='card'?0:total};
  }
  function editItem(r,key,value){r[key]=value;r.checked=false;}
  function receiptTotal(lines){
@@ -66,5 +77,5 @@
   return {date,amount,description};
  }
  function cleanSignature(strokes){if(strokes==null)return [];if(!Array.isArray(strokes)||strokes.length>100)throw Error('Invalid signature in backup.');let count=0;return strokes.map(stroke=>{if(!Array.isArray(stroke)||stroke.length<1||(count+=stroke.length)>20000)throw Error('Invalid signature in backup.');return stroke.map(p=>{if(!p||!Number.isFinite(p.x)||!Number.isFinite(p.y)||p.x<0||p.x>1||p.y<0||p.y>1)throw Error('Invalid signature in backup.');return {x:p.x,y:p.y};});});}
- const api={pence,validDate,validItem,canCreate,claimTypes,mileagePence,itemPence,totals,editItem,parseReceipt,cleanSignature};root.ExpenseCore=api;if(typeof module!=='undefined')module.exports=api;
+ const api={pence,validDate,validItem,canCreate,claimTypes,mileagePence,itemPence,vatBreakdown,totals,editItem,parseReceipt,cleanSignature};root.ExpenseCore=api;if(typeof module!=='undefined')module.exports=api;
 })(typeof globalThis!=='undefined'?globalThis:this);

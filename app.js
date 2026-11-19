@@ -52,6 +52,8 @@ function showForm(){
  expandedReceipts.clear();render();renderSignature();
 }
 function fieldsValidation(r,element){
+ const vat=element.querySelector('.vat-options');if(vat){const missing=!['none','standard','custom'].includes(r.vatMode);vat.classList.toggle('missing-field',missing);vat.setAttribute('aria-invalid',String(missing));}
+ const custom=element.querySelector('[data-field="vatAmount"]');if(custom){const invalid=r.vatMode==='custom'&&C.vatBreakdown(r)===null;custom.classList.toggle('missing-field',invalid);custom.setAttribute('aria-invalid',String(invalid));}
  for(const key of ['category','description']){
   const field=element.querySelector(`[data-field="${key}"]`);
   if(!field)continue;
@@ -86,13 +88,17 @@ function card(r,i){
  <label>Amount incl. VAT (£)<input type="text" inputmode="decimal" data-field="amount" maxlength="10" placeholder="0.00" value="${escapeHtml(r.amount)}" aria-label="Amount including VAT for receipt ${i+1}"></label>
  <label class="description">Expense Type (required)<select required data-field="category" aria-label="Expense Type for receipt ${i+1}"><option value="">Select a type</option>${options}</select></label>
  <label class="description">Notes (required)<input type="text" required maxlength="160" data-field="description" placeholder="e.g. Parking at site" value="${escapeHtml(r.description)}" aria-label="Notes for receipt ${i+1}"></label>
+ <fieldset class="vat-options description"><legend>VAT (choose one)</legend><div class="vat-buttons">${[['none','No VAT'],['standard','20% VAT shown'],['custom','Custom VAT']].map(([value,label])=>`<button type="button" data-action="vat" data-vat="${value}" aria-pressed="${r.vatMode===value}">${label}</button>`).join('')}</div>
+ <label class="custom-vat" ${r.vatMode==='custom'?'':'hidden'}>VAT amount shown on receipt (£)<input type="text" inputmode="decimal" data-field="vatAmount" maxlength="10" placeholder="0.00" value="${escapeHtml(r.vatAmount||'')}" aria-label="Custom VAT amount for receipt ${i+1}"></label>
+ <p class="vat-breakdown">${vatText(r)}</p></fieldset>
  </div></div>
  <label class="check"><input type="checkbox" data-action="check" ${checked?'checked':''} ${C.validItem(r)?'':'disabled'}>I’ve checked the photo, date, claim details and amount.</label>
  <p class="receipt-hint">${escapeHtml(r.note||'Fill in the details, then check this item.')} <button class="text-button" data-action="read" ${readingId||importingPhotos?'disabled':''}>Read photo again</button></p>
  </div></article>`;
 }
 function render(){const focusId=document.activeElement?.closest('[data-id]')?.dataset.id,field=document.activeElement?.dataset.field;$('#receipts').innerHTML=state.receipts.map(card).join('');$('#empty').hidden=!!state.receipts.length;$('#receipts').querySelectorAll('[data-id]').forEach(el=>{const r=state.receipts.find(r=>r.id===el.dataset.id);fieldsValidation(r,el);});summary();if(focusId&&field)$(`[data-id="${focusId}"] [data-field="${field}"]`)?.focus();}
-function updateCard(r){const el=$(`[data-id="${r.id}"]`);el.classList.toggle('checked',r.checked);el.querySelector('.badge').textContent=r.checked?'Checked':'Needs checking';el.querySelector('.receipt-toggle').hidden=!r.checked;const check=el.querySelector('[data-action="check"]');check.checked=r.checked;check.disabled=!C.validItem(r);fieldsValidation(r,el);if(r.kind==='mileage')el.querySelector('.mileage-value').textContent=mileageValue(r);summary();}
+function vatText(r){const value=C.vatBreakdown(r);return value?`Ex VAT ${money(value.net)} · VAT ${money(value.vat)} · Inc VAT ${money(value.gross)}`:r.vatMode==='custom'?'Enter the receipt’s VAT amount, between £0.00 and the total.':'Choose how VAT is shown on this receipt.';}
+function updateCard(r){const el=$(`[data-id="${r.id}"]`);el.classList.toggle('checked',r.checked);el.querySelector('.badge').textContent=r.checked?'Checked':'Needs checking';el.querySelector('.receipt-toggle').hidden=!r.checked;const check=el.querySelector('[data-action="check"]');check.checked=r.checked;check.disabled=!C.validItem(r);fieldsValidation(r,el);if(r.kind==='mileage')el.querySelector('.mileage-value').textContent=mileageValue(r);else el.querySelector('.vat-breakdown').textContent=vatText(r);summary();}
 $('#engineer').addEventListener('input',e=>{state.engineer=e.target.value;summary();save();});
 $('#claim-date').addEventListener('input',e=>{state.claimDate=e.target.value;summary();save();});
 const signaturePad=$('#signature-pad');let signaturePointer=null;
@@ -165,6 +171,7 @@ $('#receipts').onchange=e=>{if(e.target.dataset.action!=='check')return;const r=
  }
  save();};
 $('#receipts').onclick=async e=>{const button=e.target.closest('button[data-action]');if(!button)return;const r=state.receipts.find(x=>x.id===button.closest('[data-id]').dataset.id),action=button.dataset.action;
+ if(action==='vat'){C.editItem(r,'vatMode',button.dataset.vat);render();save();const selected=$(`[data-id="${r.id}"] [data-vat="${r.vatMode}"]`);selected?.focus({preventScroll:true});}
  if(action==='toggle'){
   if(expandedReceipts.has(r.id))expandedReceipts.delete(r.id);else expandedReceipts.add(r.id);
   render();$(`[data-id=${JSON.stringify(r.id)}] .receipt-toggle`).focus({preventScroll:true});

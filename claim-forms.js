@@ -33,6 +33,8 @@
    if(f.paymentType!=null&&!['personal','card'].includes(f.paymentType))throw Error('Invalid payment type in backup.');
    if(f.mileageRate!=null&&(typeof f.mileageRate!=='string'||f.mileageRate!==''&&C.mileagePence('1',f.mileageRate)===null))throw Error('Invalid mileage rate in backup.');
    for(const r of f.receipts){
+    if(r.vatMode!=null&&!['none','standard','custom'].includes(r.vatMode))throw Error('Invalid VAT choice in backup.');
+    if(r.vatAmount!=null&&(typeof r.vatAmount!=='string'||r.vatAmount.length>10))throw Error('Invalid VAT amount in backup.');
     if(!r||typeof r.date!=='string'||typeof r.description!=='string'||r.description.length>160||typeof r.amount!=='string'||r.amount.length>10||r.date.length>10)throw Error('Invalid expense in backup.');
     if(r.kind==='mileage'){
      if(typeof r.miles!=='string'||typeof r.rate!=='string'||r.personalVehicle!==true||f.paymentType==='card')throw Error('Invalid personal vehicle mileage in backup.');
