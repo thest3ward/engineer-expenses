@@ -15,7 +15,22 @@ Deno.serve(async(req:Request)=>{
  if(membership.error||!membership.data)return reply(403,{error:'Administrator access required.'});
  try{
   if(Number(req.headers.get('content-length')||0)>4096)return reply(413,{error:'Request too large.'});
-  const body=await req.json(),email=String(body.email||'').trim().toLowerCase(),name=String(body.name||'').trim(),role=String(body.role||''),password=String(body.password||'');
+  const body=await req.json();
+  if(body.action==='list_users'){
+   const result=await admin.from('expense_members').select('user_id,display_name,role,password_change_required').eq('company_id',membership.data.company_id).order('display_name').limit(201);
+   if(result.error)return reply(500,{error:'Could not load the people list.'});
+   const members=result.data||[],users=[];
+   for(let offset=0;offset<Math.min(members.length,200);offset+=10){
+    const batch=await Promise.all(members.slice(offset,Math.min(offset+10,200)).map(async member=>{
+     const login=await admin.auth.admin.getUserById(member.user_id);
+     if(login.error)throw Error('Could not load login details.');
+     return {...member,email:login.data.user?.email||'',editable:member.role!=='admin'&&member.user_id!==auth.data.user!.id};
+    }));users.push(...batch);
+   }
+   return reply(200,{users,truncated:members.length>200});
+  }
+  if(body.action&&body.action!=='create_user')return reply(400,{error:'Unknown account action.'});
+  const email=String(body.email||'').trim().toLowerCase(),name=String(body.name||'').trim(),role=String(body.role||''),password=String(body.password||'');
   if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||email.length>254||!name||name.length>80||!['engineer','manager','finance'].includes(role)||password.length<8||password.length>128)return reply(400,{error:'Enter a valid name, email, role and temporary password (8–128 characters).'});
   const created=await admin.auth.admin.createUser({email,password,email_confirm:true});
   if(created.error||!created.data.user)return reply(400,{error:created.error?.message||'Could not create login.'});
@@ -23,5 +38,5 @@ Deno.serve(async(req:Request)=>{
   const added=await admin.from('expense_members').insert({company_id:membership.data.company_id,user_id:user.id,role,display_name:name,password_change_required:true});
   if(added.error){await admin.auth.admin.deleteUser(user.id);return reply(500,{error:'Could not assign team access. The new login was removed; please retry.'});}
   return reply(201,{email,role,name,password_change_required:true});
- }catch{return reply(400,{error:'Could not create account. Check the details and try again.'});}
+ }catch{return reply(400,{error:'Could not complete this account action. Please retry.'});}
 });

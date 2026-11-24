@@ -15,6 +15,7 @@ function switchTrialView(view){
  trialView=view;$('#expense-main').hidden=view!=='draft';$('#cloud-main').hidden=!['mine','manager','finance'].includes(view);$('#team-main').hidden=view!=='team';
  for(const [id,value] of [['draft','draft'],['mine','mine'],['manager','manager'],['finance','finance'],['team','team']])$('#trial-'+id).setAttribute('aria-current',view===value?'page':'false');
  if(['mine','manager','finance'].includes(view))loadCloudClaims();
+ if(view==='team')loadTeamUsers();
 }
 async function startTrial(user){
  if(trialStarted)return;
@@ -105,12 +106,37 @@ $('#trial-password-form').onsubmit=async event=>{
  finally{$('#trial-password-save').disabled=false;}
 };
 function generateTemporaryPassword(){const alphabet='ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789!';const bytes=crypto.getRandomValues(new Uint8Array(16));$('#team-password').value=Array.from(bytes,b=>alphabet[b%alphabet.length]).join('');}
+let teamUsers=[],teamLoadId=0;
+async function teamInvoke(body){const response=await cloudClient.functions.invoke('expense-provision-user',{body});if(response.error){let detail;try{detail=await response.error.context?.json();}catch{}throw Error(detail?.error||response.error.message);}if(response.data?.error)throw Error(response.data.error);return response.data;}
+function renderTeamUsers(){
+ const labels={engineer:'Engineer',manager:'Manager',finance:'Accounts',admin:'Administrator'};
+ $('#team-users').innerHTML=teamUsers.length?'<div class="cloud-table-wrap"><table class="team-table"><thead><tr><th>Person</th><th>Access</th><th></th></tr></thead><tbody>'+teamUsers.map((person,index)=>{
+  const editable=person.editable&&person.role!=='admin'&&person.user_id!==trialUser.id;
+  return `<tr><td>${escapeHtml(person.display_name)}<small>${escapeHtml(person.email)}</small>${person.password_change_required?'<small>Must change temporary password</small>':''}</td><td>${editable?`<label class="sr-only" for="team-access-${index}">Access for ${escapeHtml(person.display_name)}</label><select id="team-access-${index}" data-team-access="${index}">${['engineer','manager','finance'].map(role=>`<option value="${role}"${role===person.role?' selected':''}>${labels[role]}</option>`).join('')}</select>`:escapeHtml(labels[person.role]||person.role)}</td><td>${editable?`<button type="button" data-team-save="${index}" disabled>Save access</button>`:'Protected admin login'}</td></tr>`;
+ }).join('')+'</tbody></table></div>':'No team logins yet.';
+}
+async function loadTeamUsers(){
+ if(trialMember?.role!=='admin'||trialMember.password_change_required)return;
+ const request=++teamLoadId;$('#team-users').textContent='Loading people...';$('#team-access-status').textContent='';$('#team-refresh').disabled=true;
+ try{const data=await teamInvoke({action:'list_users'});if(request!==teamLoadId)return;teamUsers=data.users||[];renderTeamUsers();if(data.truncated)$('#team-access-status').textContent='Showing the first 200 people.';}
+ catch(error){if(request===teamLoadId)$('#team-users').textContent=error.message||'Could not load people.';}
+ finally{if(request===teamLoadId)$('#team-refresh').disabled=false;}
+}
+$('#team-refresh').onclick=()=>loadTeamUsers();
+$('#team-users').onchange=event=>{const select=event.target.closest('[data-team-access]');if(!select)return;const person=teamUsers[Number(select.dataset.teamAccess)],button=$('#team-users').querySelector(`[data-team-save="${select.dataset.teamAccess}"]`);if(button)button.disabled=!person||person.role===select.value;};
+$('#team-users').onclick=async event=>{
+ const button=event.target.closest('[data-team-save]');if(!button||button.disabled)return;
+ const index=Number(button.dataset.teamSave),person=teamUsers[index],select=$('#team-access-'+index);if(!person?.editable||person.role==='admin'||person.user_id===trialUser.id||!['engineer','manager','finance'].includes(select.value)||trialMember?.role!=='admin')return;
+ const role=select.value;button.disabled=true;select.disabled=true;button.textContent='Saving...';$('#team-access-status').textContent='';
+ try{const result=cloudResult(await cloudClient.rpc('expense_set_member_role',{company_id_arg:trialMember.company_id,target_user_id:person.user_id,expected_role:person.role,new_role:role}));if(!result?.length)throw Error('Access was not updated. Refresh the people list.');person.role=role;renderTeamUsers();$('#team-access-status').textContent=person.display_name+' now has '+({engineer:'Engineer',manager:'Manager',finance:'Accounts'})[role]+' access. Ask them to refresh the app. Their login and claims are unchanged.';}
+ catch(error){$('#team-access-status').textContent=error.message||'Could not update access.';select.disabled=false;button.disabled=false;button.textContent='Save access';}
+};
 $('#team-generate').onclick=()=>generateTemporaryPassword();generateTemporaryPassword();
 $('#team-create').onsubmit=async event=>{
  event.preventDefault();if(trialMember?.role!=='admin'||trialMember.password_change_required)return;
  const name=$('#team-name').value.trim(),email=$('#team-email').value.trim(),role=$('#team-role').value,password=$('#team-password').value;
  $('#team-create-button').disabled=true;$('#team-result').textContent='Creating login...';
- try{const response=await cloudClient.functions.invoke('expense-provision-user',{body:{name,email,role,password}});if(response.error){let detail;try{detail=await response.error.context?.json();}catch{}throw Error(detail?.error||response.error.message);}if(response.data?.error)throw Error(response.data.error);$('#team-result').textContent=`Created ${email}. Give them the temporary password shown above privately. They must change it at first login. No email was sent.`;$('#team-name').value='';$('#team-email').value='';}
+ try{await teamInvoke({name,email,role,password});$('#team-result').textContent=`Created ${email}. Give them the temporary password shown above privately. They must change it at first login. No email was sent.`;$('#team-name').value='';$('#team-email').value='';await loadTeamUsers();}
  catch(error){$('#team-result').textContent=error.message||'Could not create login.';}
  finally{$('#team-create-button').disabled=false;}
 };
