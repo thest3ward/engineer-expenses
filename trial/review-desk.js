@@ -76,7 +76,6 @@
   try{const saved=cloudResult(await cloudClient.rpc('expense_save_item_review',{claim_id_arg:ctx.row.id,item_id_arg:item.id,stage_arg:ctx.stage,state_arg:state,note_arg:note.trim()}));if(current!==ctx)return;
    ctx.marks=ctx.marks.filter(mark=>!(mark.item_id===item.id&&mark.stage===ctx.stage&&mark.reviewer_id===ctx.actor));if(state!=='pending'){if(!saved?.length)throw Error('The saved check could not be confirmed. Refresh the claim.');ctx.marks.push(saved[0]);}
    $('#review-desk-message').textContent=state==='flagged'?'Issue saved. Use Return for correction below when you are ready.':state==='pending'?'Your check was cleared.':'Your item check was saved.';$('#review-flag-panel').hidden=true;
-   if(state==='flagged'){const noteField=$('#cloud-review-note');if(!noteField.value.trim()||noteField.value.startsWith('Receipt issues:'))noteField.value=issueSummary();}
    ctx.busy=false;render(ctx);if(advance&&ctx.index<ctx.row.payload.receipts.length-1)select(ctx.index+1);
   }catch(error){if(current===ctx){$('#review-desk-message').textContent=(error.message||'Could not save your check.')+' Your progress has not advanced.';ctx.busy=false;render(ctx);}}
  }
@@ -91,4 +90,3 @@
  root.addEventListener?.('resize',()=>{if(current)geometry(current);});
  root.ReviewDesk={open,close,canApprove,isBusy,issueSummary};
 })(window);
-
