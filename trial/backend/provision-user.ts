@@ -31,7 +31,7 @@ Deno.serve(async(req:Request)=>{
   }
   if(body.action&&body.action!=='create_user')return reply(400,{error:'Unknown account action.'});
   const email=String(body.email||'').trim().toLowerCase(),name=String(body.name||'').trim(),role=String(body.role||''),password=String(body.password||'');
-  if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||email.length>254||!name||name.length>80||!['engineer','manager','finance'].includes(role)||password.length<8||password.length>128)return reply(400,{error:'Enter a valid name, email, role and temporary password (8–128 characters).'});
+  if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||email.length>254||!name||name.length>80||!['engineer','manager','senior_manager','finance'].includes(role)||password.length<8||password.length>128)return reply(400,{error:'Enter a valid name, email, role and temporary password (8–128 characters).'});
   const created=await admin.auth.admin.createUser({email,password,email_confirm:true});
   if(created.error||!created.data.user)return reply(400,{error:created.error?.message||'Could not create login.'});
   const user=created.data.user;
