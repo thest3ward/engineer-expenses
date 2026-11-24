@@ -16,6 +16,14 @@ The database sets the route from the submitter's role when they submit and keeps
 
 Submitted snapshots are immutable. Correct returned claims in the original local draft and submit a new version; earlier submissions remain in the history and both approval stages restart. Personal and card forms stay separate; card expenditure is never owed to the engineer.
 
+## Receipt review on a computer
+
+Open a claim from Managers, Senior management or Accounts. The desktop review desk shows one large receipt photo with zoom, rotate and fit controls, beside its claimed amount, ex VAT, VAT choice, date, type and notes. A receipt list and Previous / Next controls let reviewers move between items. Mileage shows journey, distance, vehicle and rate details in place of a photograph.
+
+Use **Checked & next** to save your check and advance. Checks are separate for each reviewer and approval stage; another manager's checks or a previous stage's checks do not count as your own. All items, including mileage, must be checked before approving. This is enforced by the database as well as the interface. Only the currently active reviewer stage can change checks. Completed-stage records are read-only, with reviewer names and times. Existing historical approvals are preserved even if they predate item checks.
+
+**Flag an issue** saves an item-specific reason. Flagged items block approval; use Return for correction to send the claim back, or mark an item checked after resolving its issue. New submitted copies start with fresh checks. Original Word and receipt PDF downloads and whole-claim preview remain available; this update adds in-app review records, without changing the Word form layout.
+
 ## Storage and security
 
 `config.js` contains the public browser publishable key, which is intended for client use. Never place database passwords, service-role or secret API keys here. The server-side `expense-provision-user` Edge Function verifies the current Auth token and an unlocked administrator membership before creating a user in that administrator's company. Its service-role key stays in Supabase's server environment. It does not send invitation emails or allow public signup into a company.

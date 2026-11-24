@@ -1,7 +1,7 @@
 /* Supabase trial integration. Uses a browser publishable key; access is enforced by database RLS. */
 'use strict';
 const cloudClient=supabase.createClient(TrialConfig.url,TrialConfig.publishableKey,{auth:{storageKey:'engineer-expenses-trial-auth',persistSession:true,autoRefreshToken:true,detectSessionInUrl:false}});
-let trialMember=null,trialUser=null,trialStarted=false,trialView='draft',cloudRows=[],activeCloudClaim=null;
+let trialMember=null,trialUser=null,trialStarted=false,trialView='draft',cloudRows=[],activeCloudClaim=null,cloudOpenToken=0,cloudReviewBusy=false;
 const cloudMoney=n=>money(Number(n||0));
 function cloudMessage(message,error=false){const node=$('#cloud-message');node.textContent=message;node.classList.toggle('error',error);}
 function cloudResult(result){if(result.error)throw result.error;return result.data;}
@@ -13,6 +13,7 @@ function switchTrialView(view){
  if(!trialMember||trialMember.password_change_required)return;
  if(view==='manager'&&!['manager','admin'].includes(trialMember.role)||view==='senior'&&!['senior_manager','admin'].includes(trialMember.role)||view==='finance'&&!['finance','admin'].includes(trialMember.role)||view==='team'&&trialMember.role!=='admin')return;
  trialView=view;$('#expense-main').hidden=view!=='draft';$('#cloud-main').hidden=!['mine','manager','senior','finance'].includes(view);$('#team-main').hidden=view!=='team';
+ if(view==='draft'||view==='team'){cloudOpenToken++;window.ReviewDesk?.close();activeCloudClaim=null;}
  for(const [id,value] of [['draft','draft'],['mine','mine'],['manager','manager'],['senior','senior'],['finance','finance'],['team','team']])$('#trial-'+id).setAttribute('aria-current',view===value?'page':'false');
  if(['mine','manager','senior','finance'].includes(view))loadCloudClaims();
  if(view==='team')loadTeamUsers();
@@ -66,6 +67,7 @@ async function submitToFinance(){
 }
 $('#submit-cloud').onclick=()=>submitToFinance();
 async function loadCloudClaims(){
+ cloudOpenToken++;window.ReviewDesk?.close();
  if(!trialMember)return;$('#cloud-title').textContent=trialView==='finance'?'Accounts claims':trialView==='manager'?'Managers’ review':trialView==='senior'?'Senior management review':'My submitted claims';$('#cloud-list').textContent='Loading claims...';$('#cloud-detail').hidden=true;activeCloudClaim=null;
  try{
   let query=cloudClient.from('expense_claims').select('id,reference,engineer,claim_date,payment_type,status,receipt_gross,mileage_amount,mileage_pending,total_pence,owed_pence,review_note,submitted_at,created_at,manager_approved_at,manager_approved_by,first_review_role,senior_approved_at,senior_approved_by').eq('company_id',trialMember.company_id).order('created_at',{ascending:false}).limit(200);
@@ -76,19 +78,27 @@ async function loadCloudClaims(){
 }
 $('#cloud-list').onclick=event=>{const button=event.target.closest('[data-cloud-open]');if(button)openCloudClaim(cloudRows[Number(button.dataset.cloudOpen)]?.id);};
 async function openCloudClaim(id){
- if(!id)return;cloudMessage('Opening submitted claim...');
- try{const row=cloudResult(await cloudClient.from('expense_claims').select('*').eq('id',id).eq('company_id',trialMember.company_id).single());activeCloudClaim=row;const t=row;
+ if(!id)return;const token=++cloudOpenToken;window.ReviewDesk?.close();activeCloudClaim=null;$('#cloud-detail').hidden=true;updateCloudReviewGate();cloudMessage('Opening submitted claim...');
+ try{const row=cloudResult(await cloudClient.from('expense_claims').select('*').eq('id',id).eq('company_id',trialMember.company_id).single());if(token!==cloudOpenToken)return;activeCloudClaim=row;const t=row;
   $('#cloud-detail').hidden=false;$('#cloud-detail-title').textContent=row.reference+' · '+cloudStatus(row);$('#cloud-detail-summary').textContent=`${row.engineer} · ${dateText(row.claim_date)} · receipts ${cloudMoney(t.receipt_gross)} · mileage ${cloudMoney(t.mileage_amount)} · owed ${cloudMoney(t.owed_pence)}${row.mileage_pending?' (mileage payment pending)':''}`;
   $('#cloud-detail-lines').innerHTML='<div class="cloud-table-wrap"><table><thead><tr><th>Date</th><th>Type</th><th>Notes / journey</th><th>Amount / miles</th></tr></thead><tbody>'+row.payload.receipts.map(item=>`<tr><td>${dateText(item.date)}</td><td>${escapeHtml(item.category)}</td><td>${escapeHtml(item.description)}</td><td>${item.kind==='mileage'?escapeHtml(item.miles)+' miles':cloudMoney(C.pence(item.amount))}</td></tr>`).join('')+'</tbody></table></div>';
-  $('#cloud-review-note').value=row.review_note||'';const actions=approvalActions(row,trialMember.role,trialView);$('#cloud-approve').hidden=!actions.manage&&!actions.senior&&!actions.accounts;$('#cloud-approve').textContent=actions.manage?'Manager approve → send to accounts':actions.senior?'Senior management approve → send to accounts':'Accounts approve';$('#cloud-return').hidden=!actions.manage&&!actions.senior&&!actions.accounts;$('#cloud-paid').hidden=!actions.pay;$('#cloud-paid').textContent=row.payment_type==='card'?'Mark reconciled':'Mark paid';$('#cloud-note-label').hidden=!actions.manage&&!actions.senior&&!actions.accounts&&!actions.pay;$('#cloud-preview').disabled=row.status==='draft';$('#cloud-word').disabled=row.status==='draft';$('#cloud-receipts').disabled=row.status==='draft'||!row.payload.receipts.some(r=>r.kind!=='mileage');
-  const events=cloudResult(await cloudClient.from('expense_claim_events').select('status,note,created_at,actor_id').eq('claim_id',id).order('created_at'));const members=cloudResult(await cloudClient.from('expense_members').select('user_id,display_name').eq('company_id',trialMember.company_id));const names=new Map(members.map(m=>[m.user_id,m.display_name]));$('#cloud-events').textContent=events.map(e=>new Date(e.created_at).toLocaleString('en-GB')+' · '+cloudStatus({status:e.status,payment_type:row.payment_type,first_review_role:row.first_review_role})+' · '+(names.get(e.actor_id)||'Reviewer')+(e.note?' · '+e.note:'')).join('\n');
+  const actions=approvalActions(row,trialMember.role,trialView);$('#cloud-previous-note').textContent=row.review_note?'Previous review note: '+row.review_note:'';$('#cloud-review-note').value=actions.manage||actions.senior||actions.accounts?'':row.review_note||'';$('#cloud-approve').hidden=!actions.manage&&!actions.senior&&!actions.accounts;$('#cloud-approve').textContent=actions.manage?'Manager approve → send to accounts':actions.senior?'Senior management approve → send to accounts':'Accounts approve';$('#cloud-return').hidden=!actions.manage&&!actions.senior&&!actions.accounts;$('#cloud-paid').hidden=!actions.pay;$('#cloud-paid').textContent=row.payment_type==='card'?'Mark reconciled':'Mark paid';$('#cloud-note-label').hidden=!actions.manage&&!actions.senior&&!actions.accounts&&!actions.pay;$('#cloud-preview').disabled=row.status==='draft';$('#cloud-word').disabled=row.status==='draft';$('#cloud-receipts').disabled=row.status==='draft'||!row.payload.receipts.some(r=>r.kind!=='mileage');
+  const events=cloudResult(await cloudClient.from('expense_claim_events').select('status,note,created_at,actor_id').eq('claim_id',id).order('created_at'));const members=cloudResult(await cloudClient.from('expense_members').select('user_id,display_name').eq('company_id',trialMember.company_id));const names=new Map(members.map(m=>[m.user_id,m.display_name]));if(token!==cloudOpenToken)return;$('#cloud-events').textContent=events.map(e=>new Date(e.created_at).toLocaleString('en-GB')+' · '+cloudStatus({status:e.status,payment_type:row.payment_type,first_review_role:row.first_review_role})+' · '+(names.get(e.actor_id)||'Reviewer')+(e.note?' · '+e.note:'')).join('\n');
+  if(token!==cloudOpenToken)return;updateCloudReviewGate();await window.ReviewDesk?.open(row,events);if(token!==cloudOpenToken)return;
   cloudMessage(row.status==='returned'?'This claim was returned. Correct your local draft, check the changes and submit it as a new version.':'');$('#cloud-detail').scrollIntoView({block:'start'});
  }catch(error){cloudMessage(error.message||'Could not open claim.',true);}
 }
+function updateCloudReviewGate(){
+ const busy=cloudReviewBusy||!!window.ReviewDesk?.isBusy();$('#cloud-approve').disabled=busy||!window.ReviewDesk?.canApprove();$('#cloud-return').disabled=busy;$('#cloud-paid').disabled=busy;
+}
+window.updateCloudReviewGate=updateCloudReviewGate;
 async function reviewCloudClaim(status){
- const row=activeCloudClaim;if(!row)return;const actions=approvalActions(row,trialMember.role,trialView);if(status==='manager_approved'&&!actions.manage||status==='senior_approved'&&!actions.senior||status==='approved'&&!actions.accounts||status==='paid'&&!actions.pay||status==='returned'&&!actions.manage&&!actions.senior&&!actions.accounts)return;const note=$('#cloud-review-note').value.trim();if(status==='returned'&&!note){cloudMessage('Enter a note explaining the correction needed.',true);return;}
+ const row=activeCloudClaim;if(!row||cloudReviewBusy||window.ReviewDesk?.isBusy())return;const actions=approvalActions(row,trialMember.role,trialView);if(status==='manager_approved'&&!actions.manage||status==='senior_approved'&&!actions.senior||status==='approved'&&!actions.accounts||status==='paid'&&!actions.pay||status==='returned'&&!actions.manage&&!actions.senior&&!actions.accounts)return;
+ if(['manager_approved','senior_approved','approved'].includes(status)&&!window.ReviewDesk?.canApprove()){cloudMessage('Check every expense in the review panel before approving this claim.',true);updateCloudReviewGate();return;}
+ const note=$('#cloud-review-note').value.trim()||(status==='returned'?window.ReviewDesk?.issueSummary()||'':'');if(status==='returned'&&!note){cloudMessage('Enter a note explaining the correction needed.',true);return;}
+ cloudReviewBusy=true;
  for(const id of ['cloud-approve','cloud-return','cloud-paid'])$('#'+id).disabled=true;
- try{const result=cloudResult(await cloudClient.from('expense_claims').update({status,review_note:note}).eq('id',row.id).eq('company_id',trialMember.company_id).eq('status',row.status).select('id'));if(!result.length)throw Error('Someone changed this claim. Refresh and try again.');await loadCloudClaims();await openCloudClaim(row.id);}catch(error){cloudMessage(error.message,true);}finally{for(const id of ['cloud-approve','cloud-return','cloud-paid'])$('#'+id).disabled=false;}
+ try{const result=cloudResult(await cloudClient.from('expense_claims').update({status,review_note:note}).eq('id',row.id).eq('company_id',trialMember.company_id).eq('status',row.status).select('id'));if(!result.length)throw Error('Someone changed this claim. Refresh and try again.');await loadCloudClaims();await openCloudClaim(row.id);}catch(error){cloudMessage(error.message,true);}finally{cloudReviewBusy=false;updateCloudReviewGate();}
 }
 $('#cloud-approve').onclick=()=>reviewCloudClaim(trialView==='manager'?'manager_approved':trialView==='senior'?'senior_approved':'approved');$('#cloud-return').onclick=()=>reviewCloudClaim('returned');$('#cloud-paid').onclick=()=>reviewCloudClaim('paid');
 function blobDataURL(blob){return new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=()=>reject(Error('Could not read a receipt photo.'));reader.readAsDataURL(blob);});}
